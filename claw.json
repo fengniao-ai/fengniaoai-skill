@@ -1,0 +1,123 @@
+{
+  "name": "fengniaoai-skill",
+  "version": "1.0.0",
+  "author": "fengniaoai",
+  "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译。",
+  "license": "Apache-2.0",
+  "entry": "SKILL.md",
+  "tags": [
+    "image-generation",
+    "image-editing",
+    "image-translation",
+    "video-translation",
+    "background-removal",
+    "ocr",
+    "ecommerce",
+    "product-images",
+    "生图",
+    "改图",
+    "扩图",
+    "抠图",
+    "图片翻译",
+    "视频翻译",
+    "电商套图",
+    "AI翻译",
+    "AI生图",
+    "社媒设计",
+    "营销设计",
+    "蜂鸟AI"
+  ],
+  "models": ["claude-*", "gpt-*", "gemini-*"],
+  "permissions": ["network", "filesystem", "shell"],
+  "triggers": {
+    "keywords": [
+      "蜂鸟AI",
+      "蜂鸟AI翻译",
+      "蜂鸟翻译",
+      "蜂鸟AI设计",
+      "蜂鸟设计",
+      "生图",
+      "生成图片",
+      "生成海报",
+      "生成商品图",
+      "文生图",
+      "图生图",
+      "改图",
+      "修改图片",
+      "编辑图片",
+      "参考图改图",
+      "换背景",
+      "换场景",
+      "扩图",
+      "图片扩图",
+      "扩展图片",
+      "比例转换",
+      "高清重绘",
+      "高清放大",
+      "图片高清",
+      "2K放大",
+      "4K放大",
+      "抠图",
+      "图片抠图",
+      "抠出商品",
+      "去背景",
+      "透明底",
+      "白底图",
+      "OCR",
+      "识别图片文字",
+      "识别文字坐标",
+      "图片翻译",
+      "翻译图片",
+      "翻译海报",
+      "视频翻译",
+      "翻译视频",
+      "字幕翻译",
+      "擦字幕",
+      "AI配音",
+      "原声克隆",
+      "AI翻译",
+      "AI生图",
+      "社媒设计",
+      "营销设计",
+      "电商套图",
+      "制作电商套图",
+      "生成电商套图",
+      "商品主图",
+      "Listing套图"
+    ]
+  },
+  "config": {
+    "FENGNIAO_PROJECT_ID": {
+      "type": "string",
+      "description": "蜂鸟AI Project ID。可在首次执行时从 Key 页面复制给 Agent，由 Skill 安全保存；也可预先设置环境变量。",
+      "required": false
+    },
+    "FENGNIAO_API_KEY": {
+      "type": "string",
+      "description": "蜂鸟AI Api key。仅粘贴到可信私有 Agent 对话，由 Skill 安全保存；也可预先设置环境变量。",
+      "required": false
+    }
+  },
+  "skills": {
+    "fengniao-image-generate": {
+      "entry": "skills/fengniao-image-generate/SKILL.md",
+      "status": "active"
+    },
+    "fengniao-image-tools": {
+      "entry": "skills/fengniao-image-tools/SKILL.md",
+      "status": "active"
+    },
+    "fengniao-image-translate": {
+      "entry": "skills/fengniao-image-translate/SKILL.md",
+      "status": "active"
+    },
+    "fengniao-video-translate": {
+      "entry": "skills/fengniao-video-translate/SKILL.md",
+      "status": "active"
+    },
+    "fengniao-ecommerce-kit": {
+      "entry": "skills/fengniao-ecommerce-kit/SKILL.md",
+      "status": "active"
+    }
+  }
+}

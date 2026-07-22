@@ -1,0 +1,296 @@
+{
+  "schema_version": "1.0",
+  "package": "fengniaoai-skill",
+  "artifact_delivery": {
+    "auto_download": true,
+    "control_fields": {
+      "download_artifacts": {
+        "type": "boolean",
+        "default": true
+      },
+      "output_dir": {
+        "type": "string",
+        "default": "<cwd>/output/fengniaoai-skill"
+      },
+      "filename_prefix": {
+        "type": "string"
+      }
+    },
+    "environment": [
+      "FENGNIAO_AUTO_DOWNLOAD",
+      "FENGNIAO_OUTPUT_DIR",
+      "FENGNIAO_MAX_DOWNLOAD_BYTES",
+      "FENGNIAO_DOWNLOAD_TIMEOUT_MS"
+    ],
+    "artifact_fields": ["type", "role", "url", "local_path"],
+    "failure_policy": "keep_api_success_and_remote_url",
+    "skip_roles": ["source"],
+    "reference": "references/actions.md"
+  },
+  "actions": {
+    "account.configure": {
+      "label": "配置蜂鸟AI",
+      "skill": "fengniaoai-skill",
+      "status": "active",
+      "description": "安全接收 Key 页面复制的 Project ID 和 Api key，并保存到用户级配置文件。",
+      "triggers": ["配置蜂鸟AI", "连接蜂鸟AI", "设置API Key", "粘贴Key"],
+      "required": ["config"],
+      "optional": [],
+      "defaults": {},
+      "input_modes": ["stdin"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs account configure --input-stdin",
+      "ask_if_missing": {
+        "config": "请到蜂鸟AI Key 页面点击“复制给 Agent”，再把复制的两行内容粘贴到这个可信的私有对话。"
+      },
+      "reference": "references/getting-started.md"
+    },
+    "account.balance": {
+      "label": "查询剩余点数",
+      "skill": "fengniaoai-skill",
+      "status": "active",
+      "description": "查询当前 Project ID 可用的蜂鸟AI 点数。",
+      "triggers": ["剩余点数", "查询点数", "点数余额", "还有多少点"],
+      "required": [],
+      "optional": ["channel", "uid"],
+      "defaults": {
+        "channel": "fengn"
+      },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs account balance",
+      "ask_if_missing": {},
+      "reference": "references/account-and-errors.md"
+    },
+    "image.generate": {
+      "label": "从零生成图片",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "根据文字描述从零生成海报、封面、商品场景图或创意视觉。",
+      "triggers": ["生成图片", "生成一张图", "文生图", "做一张海报", "生成海报", "生成封面", "生成商品图", "商品场景图", "营销图"],
+      "required": ["prompt"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id"],
+      "defaults": {
+        "aspect_ratio": "1:1",
+        "model_alias": "tpro-1k"
+      },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image generate",
+      "ask_if_missing": {
+        "prompt": "你想生成什么画面？说清主体、场景或用途中的一两项就可以，其余我来帮你补全。"
+      },
+      "reference": "references/image-generation.md"
+    },
+    "image.transform": {
+      "label": "参考图改图",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
+      "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品"],
+      "required": ["image|reference_image_urls", "prompt"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id"],
+      "defaults": {
+        "aspect_ratio": "original",
+        "model_alias": "pro-1k"
+      },
+      "input_modes": ["https-url"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image transform",
+      "ask_if_missing": {
+        "image|reference_image_urls": "请提供一张或多张公网可访问的 HTTPS 参考图片链接。当前参考图生图暂不直接接收本地附件。",
+        "prompt": "你希望保留什么、改变什么？例如“保留商品和包装文字，把背景换成夏日海边”。"
+      },
+      "reference": "references/image-generation.md"
+    },
+    "image.expand": {
+      "label": "扩图与比例转换",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "自然补全画面外区域，将图片扩为横版、竖版、方图或指定比例。",
+      "triggers": ["扩图", "图片扩图", "扩展图片", "扩成横版", "扩成竖版", "改成16:9", "补全背景", "比例转换"],
+      "required": ["image|reference_image_urls", "aspect_ratio"],
+      "optional": ["prompt", "model_alias", "customer_id"],
+      "defaults": {
+        "model_alias": "pro-1k"
+      },
+      "input_modes": ["https-url"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image expand",
+      "ask_if_missing": {
+        "image|reference_image_urls": "请提供要扩展图片的公网 HTTPS 链接。当前扩图暂不直接接收本地附件。",
+        "aspect_ratio": "你想扩成横版、竖版还是方图？也可以直接告诉我 16:9、3:4、9:16 等比例。"
+      },
+      "reference": "references/image-generation.md"
+    },
+    "image.enhance": {
+      "label": "2K/4K 高清增强",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "通过生成式高清重绘得到 2K 或 4K 图片，不承诺像素级无损。",
+      "triggers": ["变成2K", "变成4K", "2K放大", "4K放大", "图片高清", "高清放大", "高清增强", "高清重绘", "放大到4K", "提升分辨率"],
+      "required": ["image|reference_image_urls"],
+      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id"],
+      "defaults": {
+        "resolution": "2k",
+        "aspect_ratio": "original"
+      },
+      "input_modes": ["https-url"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image enhance",
+      "ask_if_missing": {
+        "image|reference_image_urls": "请提供要增强图片的公网 HTTPS 链接。当前高清重绘暂不直接接收本地附件。"
+      },
+      "reference": "references/image-generation.md"
+    },
+    "image.cutout": {
+      "label": "智能抠图",
+      "skill": "fengniao-image-tools",
+      "status": "active",
+      "description": "识别主体并输出透明底、白底或主体裁切结果。",
+      "triggers": ["抠图", "图片抠图", "抠出商品", "去背景", "透明底", "白底图", "主体裁切", "移除背景"],
+      "required": ["image"],
+      "optional": ["subject_type", "background", "customer_id"],
+      "defaults": {
+        "subject_type": "general",
+        "background": "transparent"
+      },
+      "input_modes": ["https-url", "data-url", "local-path"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image cutout",
+      "ask_if_missing": {
+        "image": "请提供要抠图的图片。如果没有特别说明，我会先输出透明底。"
+      },
+      "reference": "references/actions.md"
+    },
+    "image.ocr-submit": {
+      "label": "创建文字坐标识别任务",
+      "skill": "fengniao-image-tools",
+      "status": "active",
+      "description": "创建图片文字与坐标识别任务，不等待任务完成。",
+      "triggers": ["创建OCR任务", "异步识别文字", "提交文字坐标识别"],
+      "required": ["image"],
+      "optional": ["customer_id"],
+      "defaults": {},
+      "input_modes": ["https-url", "data-url", "local-path"],
+      "response_mode": "async-submit",
+      "command": "node scripts/fengniaoai.mjs image ocr-submit",
+      "ask_if_missing": {
+        "image": "请提供要识别文字和坐标的图片。"
+      },
+      "reference": "references/actions.md"
+    },
+    "image.ocr-status": {
+      "label": "查询文字坐标识别任务",
+      "skill": "fengniao-image-tools",
+      "status": "active",
+      "description": "根据任务 ID 查询 OCR 识别状态和结果。",
+      "triggers": ["查询OCR任务", "OCR进度", "继续文字识别任务"],
+      "required": ["task_id"],
+      "optional": ["query_key"],
+      "defaults": {},
+      "input_modes": ["json"],
+      "response_mode": "async-query",
+      "command": "node scripts/fengniaoai.mjs image ocr-status",
+      "ask_if_missing": {
+        "task_id": "请提供之前返回的 OCR 任务 ID。"
+      },
+      "reference": "references/actions.md"
+    },
+    "image.ocr": {
+      "label": "识别图片文字和坐标",
+      "skill": "fengniao-image-tools",
+      "status": "active",
+      "description": "创建并等待图片文字与坐标识别完成。",
+      "triggers": ["识别图片文字", "文字坐标识别", "提取文字位置", "OCR", "找出文字坐标"],
+      "required": ["image"],
+      "optional": ["timeout_seconds", "poll_interval_ms", "customer_id"],
+      "defaults": {},
+      "input_modes": ["https-url", "data-url", "local-path"],
+      "response_mode": "poll",
+      "command": "node scripts/fengniaoai.mjs image ocr",
+      "ask_if_missing": {
+        "image": "请提供要识别文字和坐标的图片。"
+      },
+      "reference": "references/actions.md"
+    },
+    "image.translate": {
+      "label": "图片翻译",
+      "skill": "fengniao-image-translate",
+      "status": "active",
+      "description": "识别并翻译图片文字，生成尽量保留原版式的译文图片，同时保存历史记录并返回精修标识。",
+      "triggers": ["图片翻译", "翻译图片", "翻译海报", "把图片翻成英文", "翻译商品图", "识别后翻译"],
+      "required": ["image", "lang_from", "lang_to"],
+      "optional": ["engine", "commodity_protection", "glossary_enabled", "brand_protect", "filename"],
+      "defaults": {
+        "commodity_protection": false
+      },
+      "input_modes": ["https-url", "data-url", "local-path"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image translate",
+      "ask_if_missing": {
+        "image": "请提供要翻译的图片。",
+        "lang_from": "图片原文是什么语言？不确定时我可以自动识别。",
+        "lang_to": "你希望翻译成哪种语言？另外，商品名称和包装文字也要翻译吗？默认会一起翻译。"
+      },
+      "reference": "references/image-translation.md"
+    },
+    "video.translate-submit": {
+      "label": "创建视频翻译任务",
+      "skill": "fengniao-video-translate",
+      "status": "active",
+      "description": "创建单个或批量视频翻译任务，不等待任务完成。",
+      "triggers": ["创建视频翻译任务", "批量视频翻译", "提交视频翻译"],
+      "required": ["video_url|video_urls", "source_language", "target_language", "translation_type_list"],
+      "optional": ["subtitle", "tts", "customer_id", "custom_data"],
+      "defaults": {},
+      "input_modes": ["https-url"],
+      "response_mode": "async-submit",
+      "command": "node scripts/fengniaoai.mjs video translate-submit",
+      "ask_if_missing": {
+        "video_url|video_urls": "请提供公网可访问的 HTTPS 视频地址。",
+        "source_language": "视频主要使用什么语言？",
+        "target_language": "你希望翻译成哪种语言？",
+        "translation_type_list": "你希望只翻译字幕，还是同时生成目标语言配音？"
+      },
+      "reference": "references/video-translation.md"
+    },
+    "video.translate-status": {
+      "label": "查询视频翻译任务",
+      "skill": "fengniao-video-translate",
+      "status": "active",
+      "description": "根据任务 ID、任务 ID 列表或批次 ID 查询视频翻译进度和附件。",
+      "triggers": ["视频翻译进度", "查询视频翻译", "继续视频翻译任务"],
+      "required": ["task_id|task_ids|batch_id"],
+      "optional": [],
+      "defaults": {},
+      "input_modes": ["json"],
+      "response_mode": "async-query",
+      "command": "node scripts/fengniaoai.mjs video translate-status",
+      "ask_if_missing": {
+        "task_id|task_ids|batch_id": "请提供之前返回的视频翻译任务 ID 或批次 ID。"
+      },
+      "reference": "references/video-translation.md"
+    },
+    "video.translate": {
+      "label": "视频翻译并等待结果",
+      "skill": "fengniao-video-translate",
+      "status": "active",
+      "description": "创建一个视频翻译任务并持续查询，支持字幕翻译、擦字幕、AI 配音和原声克隆。",
+      "triggers": ["视频翻译", "翻译视频", "翻译这个视频", "视频字幕翻译", "擦掉原字幕", "生成双语字幕", "视频AI配音", "克隆原声"],
+      "required": ["video_url", "source_language", "target_language", "translation_type_list"],
+      "optional": ["subtitle", "tts", "timeout_seconds", "poll_interval_ms", "customer_id", "custom_data"],
+      "defaults": {},
+      "input_modes": ["https-url"],
+      "response_mode": "poll",
+      "command": "node scripts/fengniaoai.mjs video translate",
+      "ask_if_missing": {
+        "video_url": "请提供公网可访问的 HTTPS 视频地址。",
+        "source_language": "视频主要使用什么语言？",
+        "target_language": "你希望翻译成哪种语言？",
+        "translation_type_list": "你希望只翻译字幕，还是还要擦除原字幕或生成配音？"
+      },
+      "reference": "references/video-translation.md"
+    }
+  }
+}
