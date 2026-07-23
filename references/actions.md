@@ -15,9 +15,9 @@ CLI 优先从环境变量读取凭证，也支持由 `account configure` 保存�
 | `account` | `configure` | Key 页面复制的两行配置，通过 `--input-stdin` 输入 | 安全保存 Project ID 与 Api key，不回显凭证。 |
 | `account` | `balance` | 无 | 查询剩余油包/点数；`channel` 默认 `fengn`，可选 `uid`。 |
 | `image` | `generate` | `prompt` | 文生图。 |
-| `image` | `transform` | `image` 或 `reference_image_urls`、`prompt` | 参考图生成或改图。 |
-| `image` | `expand` | `image`、`aspect_ratio` | 通过生图接口生成式扩展画布。 |
-| `image` | `enhance` | `image` | 生成式重绘为 `2k` 或 `4k`；`resolution` 默认 `2k`。 |
+| `image` | `transform` | `image`、`reference_images` 或 `reference_image_urls`，以及 `prompt` | 单图或多参考图生成、改图。 |
+| `image` | `expand` | 参考图、`aspect_ratio` | 通过生图接口生成式扩展画布。 |
+| `image` | `enhance` | 参考图 | 生成式重绘为 `2k` 或 `4k`；`resolution` 默认 `2k`。 |
 | `image` | `cutout` | `image` | 抠图去背景。 |
 | `image` | `ocr-submit` | `image` | 创建 OCR 任务。 |
 | `image` | `ocr-status` | `task_id` | 查询一个 OCR 任务。 |
@@ -27,7 +27,51 @@ CLI 优先从环境变量读取凭证，也支持由 `account configure` 保存�
 | `video` | `translate-status` | `task_id`、`task_ids`、`batch_id` 三选一 | 查询视频翻译任务。 |
 | `video` | `translate` | 视频翻译创建参数 | 创建并轮询单个视频任务。 |
 
-抠图、OCR 和图片翻译可接受 HTTPS URL、base64 data URL或本地图片路径。生图参考图必须为公网 HTTPS URL；视频也必须为公网 HTTPS URL。CLI 会拒绝不符合要求的输入并给出可操作提示。
+抠图、OCR、图片翻译、生图参考图和视频翻译都可接受本地路径或 HTTPS URL；图片还兼容 base64 data URL。CLI 会把本地文件直接上传到临时 OSS，不把文件字节或 base64 发送给 B 端 API。
+
+生图可通过 `reference_images` 一次提供 1–6 张有序参考图，并用等长的 `reference_roles` 描述每张职责。并发上传保持原顺序；第 1 张是主体和 `original` 比例基准。多张成图仍是多个独立请求，执行与指定重做规则见 `image-generation.md`。
+
+## 本地素材无感直传
+
+Agent 只向用户索取本地图片或视频，不要求用户先上传到网盘，也不向用户解释 OSS、MD5、预签名地址或 asset key。CLI 会自动完成文件校验、申请临时地址、直传 OSS 和业务调用；上传地址 15 分钟有效，临时素材 24 小时内用于本次业务处理。
+
+- 图片和视频在申请上传前校验格式与大小，错误时直接告诉用户应更换什么文件。
+- 上传默认最多尝试 3 次，网络错误、`429`、`2061` 和服务端暂时错误按指数退避。
+- 相同上传尝试使用稳定 `request_id` 和 `content_md5`；OSS 返回 `409` 时，仅在稳定 key 场景按“对象已存在”继续。
+- 业务接口返回 `2063/2064` 时，CLI 自动申请新 key、重新上传并继续原任务；`2065` 使用原 key 退避重试。
+- 自动重试仍失败时，只提示用户检查网络或文件并稍后重试，不要求用户手工操作上传流程。
+- 预签名 URL、asset key、凭证和文件字节不得出现在对话、日志、错误详情或最终结果中。
+
+默认上传并发为图片 4、视频 2，可分别通过 `FENGNIAO_IMAGE_UPLOAD_CONCURRENCY` 和 `FENGNIAO_VIDEO_UPLOAD_CONCURRENCY` 下调；公开环境不建议提高。上传与 API 重试可用 `FENGNIAO_UPLOAD_MAX_ATTEMPTS`、`FENGNIAO_API_MAX_ATTEMPTS` 和 `FENGNIAO_API_RETRY_BASE_MS` 调整。
+
+## QPS 与批量策略
+
+以下是当前按用户维度执行的服务端上限（以 1 秒窗口计）。Agent 使用更保守的客户端并发和启动节奏，不能把 QPS 上限直接当作推荐并发；QPS 是“每秒可发起的接口请求数”，不是一次请求能处理的图片数量。
+
+| 能力 | 服务端上限 | Agent 默认批量策略 |
+| --- | ---: | --- |
+| 申请上传地址 | 20 QPS | 图片最多 4 个、视频最多 2 个并发上传；遇到限流自动退避。 |
+| 图片生成/改图/扩图/高清增强 | 20 QPS | 理论上每秒最多提交 20 个单图请求，不代表每秒完成 20 张；套图每组最多并发 4 张，组完成后再发下一组。 |
+| 抠图 | 10 QPS | 批量最多并发 4 张。 |
+| 图片翻译（`translate-save`） | 5 QPS | 不是 20 张/秒；批量最多并发 2 张，发起时间至少间隔约 220ms，每张使用独立业务 `request_id`。 |
+| 视频翻译创建 | 2 QPS | 1–10 个视频优先用一次 `video_keys`/`video_urls` 批量创建，不逐个并发创建。 |
+| 视频翻译查询 | 20 QPS | 优先使用 `batch_id`，或一次传最多 20 个 `task_ids`；每 5–10 秒查询一次。 |
+| OCR | 暂无独立路由限流项 | 保守使用最多 2 个并发，单任务按现有轮询间隔查询。 |
+
+多个 Agent 进程不共享本地并发队列，服务端 `429/30001` 与 CLI 退避重试是最终保护。图片翻译批量调度应同时满足“最多 2 个在途请求”和“每秒不超过 5 次新请求”；如果多个 Agent 共用同一账号，仍以服务端 5 QPS 为总上限。批量任务执行前应说明将产生的操作数量并确认点数；批量中的每个付费图片任务使用独立业务 `request_id`，同一任务的网络重试才复用原值。
+
+## 有效期、请求超时与轮询
+
+| 阶段 | 接口要求 | CLI 默认策略 |
+| --- | --- | --- |
+| OSS 上传地址 | 15 分钟有效 | 单次上传最多 14 分钟，并按接口返回的剩余有效时间进一步缩短；过期自动重新申请。 |
+| 临时素材 key | 24 小时有效 | 业务接口返回 `2063/2064` 时自动重新上传，不继续使用失效 key。 |
+| 生图、改图、扩图、高清增强 | 请求超时至少 120 秒；2K/4K 建议至少 180 秒 | API 请求默认 190 秒。 |
+| 图片翻译 | 同步接口，请求超时至少 120 秒 | API 请求默认 190 秒。 |
+| 视频翻译 | 异步任务，建议 5–10 秒查询一次，最长等待约 30 分钟 | 默认每 5 秒查询，等待 30 分钟后返回 pending 和任务 ID，不判定失败。 |
+| OCR | 异步任务 | 默认每 1.5 秒查询，最多等待 90 秒；超时后保留任务 ID 供继续查询。 |
+
+`FENGNIAO_REQUEST_TIMEOUT_MS` 只在部署环境确有需要时调整，不应低于同步图片接口要求；`FENGNIAO_UPLOAD_TIMEOUT_MS` 即使配置更大，也会被限制在上传地址有效期以内。
 
 接口专项参数不要从本表推断：生图读取 `image-generation.md`，图片翻译读取 `image-translation.md`，视频翻译读取 `video-translation.md`。
 

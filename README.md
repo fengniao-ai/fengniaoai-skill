@@ -2,7 +2,9 @@
 
 面向通用 AI Agent 的蜂鸟AI翻译与生图技能包。用自然语言完成图片、视频翻译，以及图片生成、编辑和电商设计；无需让用户理解模型或 API 参数。
 
-[蜂鸟AI官网](https://fengniaoai.com/) · [获取 Project ID 与 Api key](https://fengniaoai.com/userCenter/key) · [Apache-2.0 License](./LICENSE.txt)
+[蜂鸟AI官网](https://fengniaoai.com/) · [使用文档](https://github.com/fengniao-ai/fengniaoai-skill#readme) · [问题反馈](https://github.com/fengniao-ai/fengniaoai-skill/issues) · [获取 Project ID 与 Api key](https://fengniaoai.com/userCenter/key) · [Apache-2.0 License](./LICENSE.txt)
+
+隐私提示：处理用户主动提供的本地图片或视频时，Skill 会将素材临时上传到蜂鸟AI进行处理；只上传当前任务需要的素材，不写入 Skill 或用户仓库。
 
 ## 能做什么
 
@@ -14,7 +16,7 @@
 
 ### AI 生图
 
-- **图片生成**：文生图、参考图生图、比例与模型选择。
+- **图片生成**：文生图、最多 6 张有序参考图生图、比例与模型选择；可为每张参考图指定主体、角度、细节或风格职责。
 - **图片编辑**：改图、扩图、2K/4K 生成式高清增强、抠图、透明底、白底和文字坐标识别。
 - **电商套图**：围绕同一商品生成主图、场景图、卖点图和多尺寸渠道套图，并保持商品与视觉风格一致。
 - **常用场景**：通用创作、修图、电商、社媒和营销设计。
@@ -64,6 +66,10 @@ npx -y skills add https://github.com/fengniao-ai/fengniaoai-skill --skill fengni
 npx -y skills add . --skill fengniaoai-skill -g
 ```
 
+这是一个根 Skill 入口和 5 个内置子 Skill 组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译和电商套图会随根 Skill 一起安装，并由 Agent 按任务自动路由，不需要使用 `--full-depth` 分别安装。
+
+兼容性边界：本项目采用 `SKILL.md`、相对路径资源和本地 CLI 的通用 Agent Skills 结构，并提供 `agents/openai.yaml` 与 `claw.json`。支持 Agent Skills、允许执行本地命令、读写任务文件且能访问 HTTPS 网络的 Agent 客户端可以直接安装使用。不同 Agent 平台尚未统一清单格式和权限模型，因此不承诺所有纯聊天或禁止 shell、文件系统、网络访问的平台零适配运行。
+
 安装完成后，可以直接发送：
 
 ```text
@@ -94,11 +100,15 @@ export FENGNIAO_API_KEY="你的 Api key"
 | --- | :---: | :---: | --- |
 | 文生图 | — | — | 直接描述画面即可 |
 | 抠图、OCR、图片翻译 | ✓ | ✓ | 可直接发送本地图片 |
-| 参考图改图、扩图、2K/4K 高清增强 | — | ✓ | 当前需要公网可访问的 HTTPS 图片链接 |
-| 电商套图 | — | ✓ | 当前需要商品参考图的 HTTPS 链接 |
-| 视频翻译 | — | ✓ | 当前需要公网可访问的 HTTPS 视频链接 |
+| 参考图改图、扩图、2K/4K 高清增强 | ✓ | ✓ | 本地素材由 CLI 自动临时直传 |
+| 电商套图 | ✓ | ✓ | 商品参考图会自动完成临时直传 |
+| 视频翻译 | ✓ | ✓ | 本地视频会自动流式直传 |
 
 2K/4K 能力属于生成式高清增强或高清重绘，不承诺无损超分。图片和视频的格式、大小及语言范围会在执行前由 CLI 校验。
+
+本地素材由 CLI 自动完成临时直传、失败重试和限流退避，用户无需先上传到网盘或理解 OSS。批量图片按能力采用受控并发；图片翻译按 5 QPS 调度，生图按 20 QPS 调度；多个视频会优先合并为一次批量创建并统一查询，避免高频逐个请求。
+
+同一套参考图生成多张结果时，每张使用独立任务和 request ID。用户可以说“重做第 3 张”或“只修改这一张”；Agent 会复用该张的参考图顺序与 Prompt 基线，只提交指定结果，并在再次扣点前确认。
 
 ## 结果自动下载
 

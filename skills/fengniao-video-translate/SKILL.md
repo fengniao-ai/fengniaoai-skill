@@ -13,7 +13,7 @@ description: >-
 
 ## 补齐参数
 
-1. 阻塞式便捷 action 必须提供一个公网 HTTPS `video_url`；当前不能直接读取本地视频附件。多个视频使用 `translate-submit`。
+1. 阻塞式便捷 action 接受一个本地 `video` 或公网 HTTPS `video_url`；1–10 个视频使用一次 `translate-submit` 批量创建，本地视频由 CLI 以最多 2 个并发自动流式直传。
 2. 必须明确源语言、目标语言，且 `translation_type_list` 至少包含 `subtitle` 或 `speech`。用户可以直接说语言名称，CLI 会转换为接口代码。
 3. 语音使用 `AI_DUB` 时，先按 `target_language` 筛选 `../../references/video-voices.md`，再选择兼容的 `tts.voice_id`。
 4. 语音使用 `VOICE_CLONE` 时不传 `tts.voice_id`。
@@ -36,5 +36,7 @@ node ../../scripts/fengniaoai.mjs video translate --input-json '{"video_url":"ht
 ```
 
 继续已有任务时，使用 `video translate-status`，并在 `task_id`、`task_ids`、`batch_id` 中三选一。
+
+批量任务优先使用创建结果的 `batch_id` 统一查询；没有 `batch_id` 时一次查询最多 20 个 `task_ids`。轮询间隔保持 5–10 秒，不逐个高频查询，也不把最多 2 QPS 的创建上限用满。
 
 完成后展示结果视频。仍在处理中时返回任务 ID 和当前进度，不能把轮询超时当作任务失败。

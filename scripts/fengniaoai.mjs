@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { createWriteStream } from "node:fs"
-import { access, chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
+import { createReadStream, createWriteStream } from "node:fs"
+import { access, chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path"
 import { homedir } from "node:os"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { fileURLToPath } from "node:url"
@@ -238,6 +238,43 @@ function requireString(input, field, hint = field) {
   return value.trim()
 }
 
+function boundedInteger(value, fallback, { min = 1, max = 100 } = {}) {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < min) return fallback
+  return Math.min(parsed, max)
+}
+
+function wait(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
+function retryDelayMs(response, attempt) {
+  const retryAfter = response?.headers?.get?.("retry-after")
+  if (retryAfter) {
+    const seconds = Number(retryAfter)
+    if (Number.isFinite(seconds)) return Math.max(100, seconds * 1000)
+    const date = Date.parse(retryAfter)
+    if (Number.isFinite(date)) return Math.max(100, date - Date.now())
+  }
+  const base = boundedInteger(process.env.FENGNIAO_API_RETRY_BASE_MS, 1000, { min: 1, max: 60000 })
+  return Math.min(30000, base * (2 ** attempt))
+}
+
+async function mapWithConcurrency(values, concurrency, mapper) {
+  const results = new Array(values.length)
+  let cursor = 0
+  async function worker() {
+    while (cursor < values.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await mapper(values[index], index)
+    }
+  }
+  const workerCount = Math.min(values.length, Math.max(1, concurrency))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results
+}
+
 function mimeType(path) {
   const types = {
     ".jpg": "image/jpeg",
@@ -245,36 +282,213 @@ function mimeType(path) {
     ".png": "image/png",
     ".webp": "image/webp",
     ".bmp": "image/bmp",
+    ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska", ".webm": "video/webm", ".mpg": "video/mpeg",
+    ".mpeg": "video/mpeg", ".ts": "video/mp2t", ".flv": "video/x-flv",
+    ".3gp": "video/3gpp", ".asf": "video/x-ms-asf", ".wmv": "video/x-ms-wmv",
+    ".mxf": "application/mxf",
   }
   return types[extname(path).toLowerCase()]
 }
 
-async function normalizeImageInput(value, { httpsOnly = false, maxBytes, allowedMimes } = {}) {
-  if (typeof value !== "string" || !value.trim()) throw new SkillError("INVALID_INPUT", "请提供图片 URL 或本地图片路径。")
-  const trimmed = value.trim()
-  if (/^https:\/\//i.test(trimmed)) return trimmed
-  if (/^http:\/\//i.test(trimmed)) throw new SkillError("INVALID_INPUT", "图片地址必须使用 HTTPS。")
-  if (/^data:image\//i.test(trimmed)) {
-    if (httpsOnly) throw new SkillError("INVALID_INPUT", "图片生成参考图目前只支持公网 HTTPS URL，请先将本地图片上传为可访问的 HTTPS 地址。")
-    const match = trimmed.match(/^data:([^;,]+);base64,(.+)$/i)
-    if (!match) throw new SkillError("INVALID_INPUT", "图片 data URL 必须使用 base64 编码。")
-    if (allowedMimes && !allowedMimes.has(match[1].toLowerCase())) throw new SkillError("INVALID_INPUT", "图片格式不受当前接口支持。")
-    if (maxBytes && Buffer.byteLength(match[2], "base64") > maxBytes) throw new SkillError("INVALID_INPUT", `图片不能超过 ${Math.floor(maxBytes / 1024 / 1024)} MB。`)
-    return trimmed
+function normalizeAssetInput(value, currentRequestId) {
+  if (typeof value !== "string" || !value.trim()) throw new SkillError("INVALID_INPUT", "请提供本地文件路径或 HTTPS URL。", { requestId: currentRequestId })
+  let input = value.trim()
+  for (let index = 0; index < 2; index += 1) {
+    if (input.length >= 2 && input[0] === input.at(-1) && new Set(["'", '"', "`"]).has(input[0])) input = input.slice(1, -1).trim()
   }
-  if (httpsOnly) throw new SkillError("INVALID_INPUT", "图片生成参考图目前只支持公网 HTTPS URL，请先将本地图片上传为可访问的 HTTPS 地址。")
-  const absolutePath = resolve(trimmed)
-  const type = mimeType(absolutePath)
-  if (!type) throw new SkillError("INVALID_INPUT", "本地图片仅支持 JPG、PNG、WEBP 或 BMP。")
-  if (allowedMimes && !allowedMimes.has(type)) throw new SkillError("INVALID_INPUT", "图片格式不受当前接口支持。")
-  let bytes
-  try {
-    bytes = await readFile(absolutePath)
-  } catch {
-    throw new SkillError("INVALID_INPUT", `无法读取本地图片：${absolutePath}`)
+  if (/^file:/i.test(input)) {
+    try {
+      input = fileURLToPath(new URL(input))
+    } catch {
+      throw new SkillError("INVALID_INPUT", "本地 file URL 无效，请重新选择文件。", { requestId: currentRequestId })
+    }
   }
-  if (maxBytes && bytes.length > maxBytes) throw new SkillError("INVALID_INPUT", `图片不能超过 ${Math.floor(maxBytes / 1024 / 1024)} MB。`)
-  return `data:${type};base64,${bytes.toString("base64")}`
+  if (input === "~") input = homedir()
+  else if (input.startsWith("~/")) input = join(homedir(), input.slice(2))
+  return input
+}
+
+function detectImageMime(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg"
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp"
+  if (buffer.length >= 2 && buffer.subarray(0, 2).toString("ascii") === "BM") return "image/bmp"
+  return null
+}
+
+function validateImageBytes(buffer, declaredMime, currentRequestId) {
+  const actualMime = detectImageMime(buffer)
+  if (!actualMime) throw new SkillError("INVALID_INPUT", "文件内容不是受支持的图片，或图片已经损坏。", { requestId: currentRequestId })
+  if (actualMime !== declaredMime) throw new SkillError("INVALID_INPUT", "图片扩展名或声明格式与实际内容不一致，请使用正确格式的图片。", { requestId: currentRequestId })
+}
+
+function detectVideoFamily(buffer) {
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "iso-bmff"
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "AVI ") return "avi"
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "ebml"
+  if (buffer.length >= 3 && buffer.subarray(0, 3).toString("ascii") === "FLV") return "flv"
+  if (buffer.length >= 16 && buffer.subarray(0, 16).equals(Buffer.from([0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c]))) return "asf"
+  if (buffer.length >= 4 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && [0xba, 0xb3].includes(buffer[3])) return "mpeg"
+  if (buffer.length >= 1 && buffer[0] === 0x47) return "mpeg-ts"
+  if (buffer.length >= 14 && buffer.subarray(0, 14).equals(Buffer.from([0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01, 0x02]))) return "mxf"
+  return null
+}
+
+function validateVideoHeader(buffer, declaredMime, currentRequestId) {
+  const family = detectVideoFamily(buffer)
+  const accepted = {
+    "iso-bmff": new Set(["video/mp4", "video/quicktime", "video/3gpp"]),
+    avi: new Set(["video/x-msvideo"]),
+    ebml: new Set(["video/x-matroska", "video/webm"]),
+    flv: new Set(["video/x-flv"]),
+    asf: new Set(["video/x-ms-asf", "video/x-ms-wmv"]),
+    mpeg: new Set(["video/mpeg"]),
+    "mpeg-ts": new Set(["video/mp2t"]),
+    mxf: new Set(["application/mxf"]),
+  }
+  if (!family) throw new SkillError("INVALID_INPUT", "文件内容不是受支持的视频，或视频已经损坏。", { requestId: currentRequestId })
+  if (!accepted[family]?.has(declaredMime)) throw new SkillError("INVALID_INPUT", "视频扩展名与实际容器格式不一致，请使用正确格式的视频。", { requestId: currentRequestId })
+}
+
+function fileHeader(path, maxBytes = 64) {
+  return new Promise((resolvePromise, reject) => {
+    const chunks = []
+    let size = 0
+    const stream = createReadStream(path, { start: 0, end: maxBytes - 1 })
+    stream.on("data", (chunk) => {
+      chunks.push(chunk)
+      size += chunk.length
+    })
+    stream.on("error", reject)
+    stream.on("end", () => resolvePromise(Buffer.concat(chunks, size)))
+  })
+}
+
+const UPLOAD_PURPOSES = new Map([
+  ["image_reference", { maxBytes: 3 * 1024 * 1024, mimes: new Set(["image/jpeg", "image/png", "image/webp"]) }],
+  ["image_cutout", { maxBytes: 10 * 1024 * 1024, mimes: new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]) }],
+  ["image_ocr", { maxBytes: 3 * 1024 * 1024, mimes: new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]) }],
+  ["image_translate", { maxBytes: 5 * 1024 * 1024, mimes: new Set(["image/jpeg", "image/png", "image/webp"]) }],
+  ["video_translate", { maxBytes: 500 * 1024 * 1024, mimes: new Set(["video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm", "video/mpeg", "video/mp2t", "video/x-flv", "video/3gpp", "video/x-ms-asf", "video/x-ms-wmv", "application/mxf"]) }],
+])
+
+function bufferMd5(buffer) {
+  return createHash("md5").update(buffer).digest("base64")
+}
+
+function fileMd5(path) {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("md5")
+    const stream = createReadStream(path)
+    stream.on("data", (chunk) => hash.update(chunk))
+    stream.on("error", reject)
+    stream.on("end", () => resolvePromise(hash.digest("base64")))
+  })
+}
+
+async function materializeInputAsset(value, { purpose, currentRequestId, refreshIndex = 0 }) {
+  const input = normalizeAssetInput(value, currentRequestId)
+  if (/^https:\/\//i.test(input)) return { url: input }
+  if (/^http:\/\//i.test(input)) throw new SkillError("INVALID_INPUT", "远程文件地址必须使用 HTTPS。", { requestId: currentRequestId })
+  if (input.startsWith("api-upload-temp/")) return { key: input }
+  const profile = UPLOAD_PURPOSES.get(purpose)
+  if (!profile) throw new SkillError("INVALID_INPUT", "不支持的上传用途。", { requestId: currentRequestId })
+
+  let filename
+  let contentType
+  let size
+  let body
+  let localPath
+  let contentMd5
+  if (/^data:/i.test(input)) {
+    const match = input.match(/^data:([^;,]+);base64,(.+)$/i)
+    if (!match) throw new SkillError("INVALID_INPUT", "data URL 必须使用 base64 编码。", { requestId: currentRequestId })
+    contentType = match[1].toLowerCase()
+    body = Buffer.from(match[2], "base64")
+    size = body.length
+    if (contentType.startsWith("image/")) validateImageBytes(body, contentType, currentRequestId)
+    contentMd5 = bufferMd5(body)
+    const extension = contentType === "image/jpeg" ? "jpg" : contentType.split("/").pop()
+    filename = `upload.${extension}`
+  } else {
+    const absolutePath = resolve(input)
+    contentType = mimeType(absolutePath)
+    if (!contentType) throw new SkillError("INVALID_INPUT", "本地文件格式不受支持。", { requestId: currentRequestId })
+    let fileStat
+    try { fileStat = await stat(absolutePath) } catch { throw new SkillError("INVALID_INPUT", `无法读取本地文件：${absolutePath}`, { requestId: currentRequestId }) }
+    if (!fileStat.isFile()) throw new SkillError("INVALID_INPUT", `不是有效文件：${absolutePath}`, { requestId: currentRequestId })
+    filename = basename(absolutePath)
+    size = fileStat.size
+    if (purpose === "video_translate") {
+      try {
+        validateVideoHeader(await fileHeader(absolutePath), contentType, currentRequestId)
+        contentMd5 = await fileMd5(absolutePath)
+      } catch (error) {
+        if (error instanceof SkillError) throw error
+        throw new SkillError("INVALID_INPUT", `无法读取本地文件：${absolutePath}`, { requestId: currentRequestId })
+      }
+      localPath = absolutePath
+    } else {
+      try { body = await readFile(absolutePath) } catch { throw new SkillError("INVALID_INPUT", `无法读取本地文件：${absolutePath}`, { requestId: currentRequestId }) }
+      validateImageBytes(body, contentType, currentRequestId)
+      contentMd5 = bufferMd5(body)
+    }
+  }
+  if (!profile.mimes.has(contentType)) throw new SkillError("INVALID_INPUT", "文件格式不受当前接口支持。", { requestId: currentRequestId })
+  if (size < 1 || size > profile.maxBytes) throw new SkillError("INVALID_INPUT", `文件不能超过 ${Math.floor(profile.maxBytes / 1024 / 1024)} MB。`, { requestId: currentRequestId })
+
+  const uploadFingerprint = createHash("sha256").update([currentRequestId, purpose, contentMd5, refreshIndex].join("\0")).digest("hex").slice(0, 24)
+  const uploadRequestId = `${String(currentRequestId).slice(0, 90)}-upload-${uploadFingerprint}`
+  const uploadBody = {
+    request_id: uploadRequestId,
+    purpose,
+    filename,
+    content_type: contentType,
+    size,
+    content_md5: contentMd5,
+  }
+  const maxAttempts = boundedInteger(process.env.FENGNIAO_UPLOAD_MAX_ATTEMPTS, 3, { min: 1, max: 5 })
+  let lastStatus
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const payload = await apiRequest("/api/v1/oss/upload-url", uploadBody, currentRequestId)
+    const upload = payload.result?.upload
+    const assetKey = payload.result?.asset_key
+    if (!upload?.url || !assetKey) throw new SkillError("TEMPORARY_UNAVAILABLE", "未能创建文件上传地址，请稍后重试。", { retryable: true, requestId: currentRequestId })
+    const method = String(upload.method || "PUT").toUpperCase()
+    if (method !== "PUT") throw new SkillError("TEMPORARY_UNAVAILABLE", "文件上传协议暂不受支持，请稍后重试。", { retryable: true, requestId: currentRequestId })
+    const configuredTimeout = boundedInteger(process.env.FENGNIAO_UPLOAD_TIMEOUT_MS, 14 * 60 * 1000, { min: 1000, max: 15 * 60 * 1000 })
+    const expiresAt = Date.parse(upload.expires_at || "")
+    const remainingMs = Number.isFinite(expiresAt) ? expiresAt - Date.now() - 5000 : configuredTimeout
+    if (remainingMs <= 1000) {
+      if (attempt + 1 < maxAttempts) continue
+      throw new SkillError("TEMPORARY_UNAVAILABLE", "文件上传地址已过期，请稍后重试。", { retryable: true, requestId: currentRequestId })
+    }
+    const requestBody = localPath ? createReadStream(localPath) : body
+    let response
+    try {
+      response = await fetch(upload.url, {
+        method,
+        headers: upload.headers,
+        body: requestBody,
+        ...(requestBody?.pipe ? { duplex: "half" } : {}),
+        signal: AbortSignal.timeout(Math.min(configuredTimeout, remainingMs)),
+      })
+    } catch {
+      if (attempt + 1 < maxAttempts) {
+        await wait(retryDelayMs(null, attempt))
+        continue
+      }
+      throw new SkillError("TEMPORARY_UNAVAILABLE", "文件上传暂时失败，请检查网络后重试。", { retryable: true, requestId: currentRequestId })
+    }
+    lastStatus = response.status
+    if (response.ok || response.status === 409) return { key: assetKey }
+    if (attempt + 1 < maxAttempts) {
+      await wait(retryDelayMs(response, attempt))
+      continue
+    }
+  }
+  throw new SkillError("TEMPORARY_UNAVAILABLE", `文件上传暂时失败${lastStatus ? `（HTTP ${lastStatus}）` : ""}，请稍后重试。`, { retryable: true, requestId: currentRequestId })
 }
 
 function mapError(code, msg, requestIdValue) {
@@ -312,6 +526,12 @@ function mapError(code, msg, requestIdValue) {
     2053: ["TEMPORARY_UNAVAILABLE", true, "视频翻译服务暂时不可用，请稍后重试。"],
     2054: ["TASK_RUNNING", true, "相同视频翻译请求正在处理中。"],
     2055: ["SAFETY_REJECTED", false, "视频地址未通过安全校验，请更换后重试。"],
+    2060: ["INVALID_INPUT", false, "文件上传参数不正确，请检查格式和大小。"],
+    2061: ["TEMPORARY_UNAVAILABLE", true, "暂时无法创建文件上传地址，请稍后重试。"],
+    2062: ["INVALID_INPUT", false, "临时文件无效或不属于当前项目，请重新选择文件。"],
+    2063: ["TEMPORARY_UNAVAILABLE", true, "OSS 尚未找到上传文件，请使用相同 request_id 重试。"],
+    2064: ["INVALID_INPUT", false, "临时文件已过期，请重新选择并上传。"],
+    2065: ["TEMPORARY_UNAVAILABLE", true, "临时文件暂时无法校验，请稍后重试。"],
     30000: ["CREDITS_INSUFFICIENT", false, `蜂鸟AI 点数不足。请登录 ${LOGIN_URL} 获取点数后重试。`],
     30001: ["RATE_LIMITED", true, "请求频率过高，请稍后重试。"],
     4015: ["INVALID_INPUT", false, msg || "剩余点数查询失败，请检查项目渠道。"],
@@ -325,36 +545,53 @@ async function apiRequest(path, body, currentRequestId) {
   const { projectId, apiKey } = await credentials()
   const baseUrl = String(process.env.FENGNIAO_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "")
   const timeoutMs = Number(process.env.FENGNIAO_REQUEST_TIMEOUT_MS || 190000)
-  let response
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Fengniaoai-Project": projectId,
-        "Content-Type": "application/json",
-        "X-Request-Id": currentRequestId,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-  } catch (error) {
-    const timeout = error?.name === "TimeoutError"
-    throw new SkillError(
-      "TEMPORARY_UNAVAILABLE",
-      timeout ? "请求超时，请使用相同 request_id 重试。" : "无法连接蜂鸟AI 服务，请检查网络后重试。",
-      { retryable: true, requestId: currentRequestId },
-    )
+  const maxAttempts = boundedInteger(process.env.FENGNIAO_API_MAX_ATTEMPTS, 3, { min: 1, max: 5 })
+  const retryableCodes = new Set([429, 2061, 2065, 30001])
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let response
+    try {
+      response = await fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Fengniaoai-Project": projectId,
+          "Content-Type": "application/json",
+          "X-Request-Id": currentRequestId,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch (error) {
+      if (attempt + 1 < maxAttempts) {
+        await wait(retryDelayMs(null, attempt))
+        continue
+      }
+      const timeout = error?.name === "TimeoutError"
+      throw new SkillError(
+        "TEMPORARY_UNAVAILABLE",
+        timeout ? "请求超时，请稍后重试。" : "无法连接蜂鸟AI 服务，请检查网络后重试。",
+        { retryable: true, requestId: currentRequestId },
+      )
+    }
+    let payload
+    try {
+      payload = await response.json()
+    } catch {
+      if (attempt + 1 < maxAttempts && response.status >= 500) {
+        await wait(retryDelayMs(response, attempt))
+        continue
+      }
+      throw new SkillError("TEMPORARY_UNAVAILABLE", "蜂鸟AI 返回了无法解析的响应，请稍后重试。", { retryable: true, requestId: currentRequestId })
+    }
+    const businessCode = Number(payload?.code ?? response.status)
+    if (response.ok && businessCode === 200) return payload
+    if (attempt + 1 < maxAttempts && (retryableCodes.has(businessCode) || response.status >= 500)) {
+      await wait(retryDelayMs(response, attempt))
+      continue
+    }
+    throw mapError(businessCode, payload?.msg, payload?.request_id || currentRequestId)
   }
-  let payload
-  try {
-    payload = await response.json()
-  } catch {
-    throw new SkillError("TEMPORARY_UNAVAILABLE", "蜂鸟AI 返回了无法解析的响应，请稍后重试。", { retryable: true, requestId: currentRequestId })
-  }
-  const businessCode = Number(payload?.code ?? response.status)
-  if (!response.ok || businessCode !== 200) throw mapError(businessCode, payload?.msg, payload?.request_id || currentRequestId)
-  return payload
+  throw new SkillError("TEMPORARY_UNAVAILABLE", "蜂鸟AI 服务暂时不可用，请稍后重试。", { retryable: true, requestId: currentRequestId })
 }
 
 function artifact(type, url, extra = {}) {
@@ -586,19 +823,61 @@ async function accountBalance(input) {
 }
 
 function referenceUrls(input) {
+  if (Array.isArray(input.reference_image_keys)) return input.reference_image_keys
+  if (Array.isArray(input.reference_images)) return input.reference_images
   if (Array.isArray(input.reference_image_urls)) return input.reference_image_urls
+  if (Array.isArray(input.image)) return input.image
   if (input.image) return [input.image]
   return []
 }
 
-async function prepareReferences(input) {
+function shouldRefreshAsset(error, refreshIndex) {
+  return refreshIndex < 1 && (Number(error?.code) === 2063 || Number(error?.code) === 2064)
+}
+
+async function prepareReferences(input, refreshIndex = 0) {
+  const sourceFields = ["image", "reference_images", "reference_image_urls", "reference_image_keys"].filter((field) => input[field] !== undefined)
+  if (sourceFields.length !== 1) throw new SkillError("INVALID_INPUT", "参考图来源必须且只能传一种。", { requestId: input.request_id })
   const refs = referenceUrls(input)
   if (!refs.length) throw new SkillError("INVALID_INPUT", "请提供参考图片。", { requestId: input.request_id })
   if (refs.length > 6) throw new SkillError("INVALID_INPUT", "图片生成最多支持六张参考图。", { requestId: input.request_id })
-  return Promise.all(refs.map((item) => normalizeImageInput(item, { httpsOnly: true })))
+  const currentRequestId = requestId(input)
+  const hasRemoteInputs = refs.some((item) => typeof item === "string" && /^https:\/\//i.test(item.trim()))
+  const hasOwnedInputs = refs.some((item) => typeof item !== "string" || !/^https:\/\//i.test(item.trim()))
+  if (hasRemoteInputs && hasOwnedInputs) {
+    throw new SkillError("INVALID_INPUT", "同一次参考图任务请统一使用本地图片或 HTTPS 图片，避免参考图顺序变化。", { requestId: currentRequestId })
+  }
+  const uploadConcurrency = boundedInteger(process.env.FENGNIAO_IMAGE_UPLOAD_CONCURRENCY, 4, { min: 1, max: 8 })
+  const assets = await mapWithConcurrency(refs, uploadConcurrency, (item) => materializeInputAsset(item, { purpose: "image_reference", currentRequestId, refreshIndex }))
+  const hasUrls = assets.some((asset) => asset.url)
+  const hasKeys = assets.some((asset) => asset.key)
+  if (hasUrls && hasKeys) {
+    throw new SkillError("INVALID_INPUT", "同一次参考图任务请统一使用本地图片或 HTTPS 图片，避免参考图顺序变化。", { requestId: currentRequestId })
+  }
+  if (hasKeys) return { reference_image_keys: assets.map((asset) => asset.key) }
+  return { reference_image_urls: assets.map((asset) => asset.url) }
 }
 
-async function generateImage(action, input) {
+function promptWithReferenceRoles(prompt, input, referenceCount) {
+  if (referenceCount < 2) return prompt
+  let roles = input.reference_roles
+  if (roles !== undefined) {
+    if (!Array.isArray(roles) || roles.length !== referenceCount) throw new SkillError("INVALID_INPUT", "reference_roles 必须与参考图数量一致。", { requestId: input.request_id })
+    roles = roles.map((role) => {
+      const normalized = String(role || "").trim()
+      if (!normalized || normalized.length > 120) throw new SkillError("INVALID_INPUT", "每个参考图职责必须为 1 到 120 个字符。", { requestId: input.request_id })
+      return normalized
+    })
+  } else {
+    roles = Array.from({ length: referenceCount }, (_, index) => index === 0
+      ? "主参考图：锁定主体身份、核心外观、构图关系，并作为 original 比例基准"
+      : "补充参考图：仅补充同一主体的其他角度、结构、材质或可见细节，不引入新的主体")
+  }
+  const roleLines = roles.map((role, index) => `- 参考图 ${index + 1}：${role}`).join("\n")
+  return `## 参考图职责\n\n${roleLines}\n\n严格按编号使用参考图；不同参考图发生冲突时，以参考图 1 和用户明确要求为准。\n\n${prompt}`
+}
+
+async function generateImage(action, input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
   for (const field of ["quantity", "number", "count", "n"]) {
     if (input[field] !== undefined) throw new SkillError("INVALID_INPUT", "图片生成每次固定生成一张，请拆分为多个请求。", { requestId: currentRequestId })
@@ -612,37 +891,49 @@ async function generateImage(action, input) {
       aspect_ratio: input.aspect_ratio || "1:1",
     }
   } else if (action === "transform") {
+    const referenceCount = referenceUrls(input).length
+    const references = await prepareReferences(input, refreshIndex)
     body = {
       request_id: currentRequestId,
-      prompt: requireString(input, "prompt", "图片修改要求"),
-      reference_image_urls: await prepareReferences(input),
+      prompt: promptWithReferenceRoles(requireString(input, "prompt", "图片修改要求"), input, referenceCount),
+      ...references,
       model_alias: input.model_alias || "pro-1k",
       aspect_ratio: input.aspect_ratio || "original",
     }
   } else if (action === "expand") {
+    const referenceCount = referenceUrls(input).length
+    const references = await prepareReferences(input, refreshIndex)
     body = {
       request_id: currentRequestId,
-      prompt: input.prompt || "Extend the image naturally to the requested aspect ratio. Preserve the main subject, product identity, visible text, colors, lighting, and original composition. Only generate content needed outside the original canvas.",
-      reference_image_urls: await prepareReferences(input),
+      prompt: promptWithReferenceRoles(input.prompt || "Extend the image naturally to the requested aspect ratio. Preserve the main subject, product identity, visible text, colors, lighting, and original composition. Only generate content needed outside the original canvas.", input, referenceCount),
+      ...references,
       model_alias: input.model_alias || "pro-1k",
       aspect_ratio: requireString(input, "aspect_ratio", "目标图片比例"),
     }
   } else {
     const resolution = String(input.resolution || "2k").toLowerCase()
     if (!new Set(["2k", "4k"]).has(resolution)) throw new SkillError("INVALID_INPUT", "高清增强 resolution 仅支持 2k 或 4k。", { requestId: currentRequestId })
+    const referenceCount = referenceUrls(input).length
+    const references = await prepareReferences(input, refreshIndex)
     body = {
       request_id: currentRequestId,
-      prompt: input.prompt || "Create a high-resolution redraw of the reference image. Preserve the subject identity, product details, visible text, composition, colors, and lighting. Do not add or remove content.",
-      reference_image_urls: await prepareReferences(input),
+      prompt: promptWithReferenceRoles(input.prompt || "Create a high-resolution redraw of the reference image. Preserve the subject identity, product details, visible text, composition, colors, and lighting. Do not add or remove content.", input, referenceCount),
+      ...references,
       model_alias: input.model_alias || (resolution === "4k" ? "pro-4k" : "pro-2k"),
       aspect_ratio: input.aspect_ratio || "original",
     }
   }
   if (!IMAGE_MODELS.has(body.model_alias)) throw new SkillError("INVALID_INPUT", "不支持的图片生成模型。", { requestId: currentRequestId })
   if (!IMAGE_RATIOS.has(body.aspect_ratio)) throw new SkillError("INVALID_INPUT", "不支持的图片比例。", { requestId: currentRequestId })
-  if (body.aspect_ratio === "original" && !body.reference_image_urls?.length) throw new SkillError("INVALID_INPUT", "original 比例只能用于带参考图的图生图。", { requestId: currentRequestId })
+  if (body.aspect_ratio === "original" && !body.reference_image_urls?.length && !body.reference_image_keys?.length) throw new SkillError("INVALID_INPUT", "original 比例只能用于带参考图的图生图。", { requestId: currentRequestId })
   if (input.customer_id !== undefined) body.customer_id = input.customer_id
-  const payload = await apiRequest("/api/v1/img/generate", body, currentRequestId)
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/img/generate", body, currentRequestId)
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return generateImage(action, input, refreshIndex + 1)
+    throw error
+  }
   return success(`image.${action}`, payload.request_id || currentRequestId, "completed", {
     artifacts: imageArtifacts(payload.result),
     data: payload.result,
@@ -650,21 +941,28 @@ async function generateImage(action, input) {
   })
 }
 
-async function cutout(input) {
+async function cutout(input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
   const subjectTypes = { person: "body", product: "commodity", clothing: "cloth", general: "common" }
-  const backgrounds = { transparent: "mask", white: "whiteBK", crop: "crop" }
+  const backgrounds = { transparent: "crop", white: "whiteBK", crop: "crop" }
   const subjectType = input.subject_type || "general"
   const background = input.background || "transparent"
   if (!subjectTypes[subjectType]) throw new SkillError("INVALID_INPUT", "subject_type 仅支持 person、product、clothing 或 general。", { requestId: currentRequestId })
   if (!backgrounds[background]) throw new SkillError("INVALID_INPUT", "background 仅支持 transparent、white 或 crop。", { requestId: currentRequestId })
-  const payload = await apiRequest("/api/v1/img/cutout", {
-    request_id: currentRequestId,
-    customer_id: input.customer_id,
-    image: await normalizeImageInput(input.image),
-    type: subjectTypes[subjectType],
-    output_mode: backgrounds[background],
-  }, currentRequestId)
+  const asset = await materializeInputAsset(input.image, { purpose: "image_cutout", currentRequestId, refreshIndex })
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/img/cutout", {
+      request_id: currentRequestId,
+      customer_id: input.customer_id,
+      ...(asset.key ? { image_key: asset.key } : { image: asset.url }),
+      type: subjectTypes[subjectType],
+      output_mode: backgrounds[background],
+    }, currentRequestId)
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return cutout(input, refreshIndex + 1)
+    throw error
+  }
   return success("image.cutout", payload.request_id || currentRequestId, "completed", {
     artifacts: imageArtifacts(payload.result),
     data: payload.result,
@@ -672,9 +970,16 @@ async function cutout(input) {
   })
 }
 
-async function ocrSubmit(input) {
+async function ocrSubmit(input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
-  const payload = await apiRequest("/api/v1/editor/ocr", { image: await normalizeImageInput(input.image) }, currentRequestId)
+  const asset = await materializeInputAsset(input.image, { purpose: "image_ocr", currentRequestId, refreshIndex })
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/editor/ocr", asset.key ? { image_key: asset.key } : { image: asset.url }, currentRequestId)
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return ocrSubmit(input, refreshIndex + 1)
+    throw error
+  }
   const task = payload.data?.data || payload.data || {}
   const taskId = task.id || task.task_id
   if (!taskId) throw new SkillError("TEMPORARY_UNAVAILABLE", "OCR 任务已提交但未返回任务 ID，请稍后重试。", { retryable: true, requestId: currentRequestId })
@@ -720,7 +1025,7 @@ async function ocr(input) {
   return poll("image.ocr", ocrStatus, input, submitted)
 }
 
-async function translateImage(input) {
+async function translateImage(input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
   const languageCode = (value) => {
     const normalized = String(value || "").trim().toLowerCase()
@@ -757,12 +1062,10 @@ async function translateImage(input) {
     filename = filename.split(/[\\/]/).pop().replace(/[\x00-\x1f\x7f]/g, "").trim()
     if (!filename || filename.length > 255) throw new SkillError("INVALID_INPUT", "图片 filename 不能超过 255 个字符。", { requestId: currentRequestId })
   }
+  const asset = await materializeInputAsset(source, { purpose: "image_translate", currentRequestId, refreshIndex })
   const body = {
     request_id: currentRequestId,
-    image: await normalizeImageInput(source, {
-      maxBytes: 5 * 1024 * 1024,
-      allowedMimes: new Set(["image/jpeg", "image/png", "image/webp"]),
-    }),
+    ...(asset.key ? { image_key: asset.key } : { image: asset.url }),
     lang_from: langFrom,
     lang_to: langTo,
     engine,
@@ -771,7 +1074,13 @@ async function translateImage(input) {
     brand_protect: Boolean(input.brand_protect),
   }
   if (filename) body.filename = filename
-  const payload = await apiRequest("/api/v1/img/translate-save", body, currentRequestId)
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/img/translate-save", body, currentRequestId)
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return translateImage(input, refreshIndex + 1)
+    throw error
+  }
   return success("image.translate", payload.request_id || currentRequestId, "completed", {
     taskId: payload.taskId,
     artifacts: translatedImageArtifacts(payload.result),
@@ -848,11 +1157,11 @@ async function validateVideoCreateInput(input, currentRequestId) {
   if (currentRequestId.length > 128) throw new SkillError("INVALID_INPUT", "视频翻译 request_id 长度不能超过 128。", { requestId: currentRequestId })
   if (input.callback_url !== undefined && String(input.callback_url || "").trim()) throw new SkillError("INVALID_INPUT", "视频翻译当前不支持 callback_url。", { requestId: currentRequestId })
   if (input.custom_data !== undefined && Buffer.byteLength(JSON.stringify(input.custom_data)) > 4096) throw new SkillError("INVALID_INPUT", "custom_data 不能超过 4 KB。", { requestId: currentRequestId })
-  const hasSingle = input.video_url !== undefined
-  const hasBatch = input.video_urls !== undefined
-  if (hasSingle === hasBatch) throw new SkillError("INVALID_INPUT", "video_url 和 video_urls 必须且只能传一个。", { requestId: currentRequestId })
-  if (hasSingle) validateHttpsUrl(input.video_url, "视频地址")
-  if (hasBatch) {
+  const sourceFields = ["video_url", "video_urls", "video_key", "video_keys"].filter((field) => input[field] !== undefined)
+  if (sourceFields.length !== 1) throw new SkillError("INVALID_INPUT", "视频来源必须且只能传一种。", { requestId: currentRequestId })
+  const sourceField = sourceFields[0]
+  if (sourceField === "video_url") validateHttpsUrl(input.video_url, "视频地址")
+  if (sourceField === "video_urls") {
     if (!Array.isArray(input.video_urls) || input.video_urls.length < 1 || input.video_urls.length > 10) throw new SkillError("INVALID_INPUT", "video_urls 必须包含 1 到 10 个视频地址。", { requestId: currentRequestId })
     const urls = input.video_urls.map((url) => validateHttpsUrl(url, "视频地址"))
     if (new Set(urls).size !== urls.length) throw new SkillError("INVALID_INPUT", "video_urls 不能包含重复地址。", { requestId: currentRequestId })
@@ -878,17 +1187,39 @@ async function validateVideoCreateInput(input, currentRequestId) {
   }
 }
 
-async function videoSubmit(input) {
+async function videoSubmit(input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
-  const normalizedInput = {
+  let normalizedInput = {
     ...input,
     source_language: normalizeVideoLanguage(input.source_language, "源语言"),
     target_language: normalizeVideoLanguage(input.target_language, "目标语言"),
   }
+  const localFields = ["video", "videos"].filter((field) => normalizedInput[field] !== undefined)
+  const remoteFields = ["video_url", "video_urls", "video_key", "video_keys"].filter((field) => normalizedInput[field] !== undefined)
+  if (localFields.length + remoteFields.length !== 1) throw new SkillError("INVALID_INPUT", "请提供一个本地视频、视频列表或 HTTPS 视频地址。", { requestId: currentRequestId })
+  if (localFields.length) {
+    const values = localFields[0] === "videos" ? normalizedInput.videos : [normalizedInput.video]
+    if (!Array.isArray(values) || values.length < 1 || values.length > 10) throw new SkillError("INVALID_INPUT", "视频列表必须包含 1 到 10 个文件。", { requestId: currentRequestId })
+    const uploadConcurrency = boundedInteger(process.env.FENGNIAO_VIDEO_UPLOAD_CONCURRENCY, 2, { min: 1, max: 4 })
+    const assets = await mapWithConcurrency(values, uploadConcurrency, (value) => materializeInputAsset(value, { purpose: "video_translate", currentRequestId, refreshIndex }))
+    delete normalizedInput.video
+    delete normalizedInput.videos
+    const urls = assets.flatMap((asset) => asset.url ? [asset.url] : [])
+    const keys = assets.flatMap((asset) => asset.key ? [asset.key] : [])
+    if (urls.length && keys.length) throw new SkillError("INVALID_INPUT", "同一批视频请统一使用本地文件或 HTTPS 地址。", { requestId: currentRequestId })
+    if (values.length === 1) Object.assign(normalizedInput, keys.length ? { video_key: keys[0] } : { video_url: urls[0] })
+    else Object.assign(normalizedInput, keys.length ? { video_keys: keys } : { video_urls: urls })
+  }
   if (normalizedInput.tts?.voice_id !== undefined) normalizedInput.tts = { ...normalizedInput.tts, voice_id: String(normalizedInput.tts.voice_id).trim() }
   await validateVideoCreateInput(normalizedInput, currentRequestId)
   const body = { ...cleanControlFields(normalizedInput), request_id: currentRequestId }
-  const payload = await apiRequest("/api/v1/video/translate/create", body, currentRequestId)
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/video/translate/create", body, currentRequestId)
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return videoSubmit(input, refreshIndex + 1)
+    throw error
+  }
   const result = payload.result || {}
   const taskId = result.task_id || null
   return success("video.translate-submit", payload.request_id || currentRequestId, result.status || "pending", {

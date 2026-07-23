@@ -22,7 +22,7 @@ description: >-
 | 服装 | `clothing` | 用户要求的输出 |
 | Logo、宠物或其他 | `general` | 用户要求的输出 |
 
-`background` 使用 `transparent`、`white` 或 `crop`。
+`background` 使用 `transparent`、`white` 或 `crop`。透明底和主体裁切由接口返回带 Alpha 通道的裁切 PNG；不要把黑白 `mask` 遮罩图作为透明底交付。
 
 ```bash
 node ../../scripts/fengniaoai.mjs image cutout --input-json '{"image":"https://example.com/product.jpg","subject_type":"product","background":"transparent"}'

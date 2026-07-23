@@ -5,6 +5,15 @@
   "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译。",
   "license": "Apache-2.0",
   "entry": "SKILL.md",
+  "homepage": "https://fengniaoai.com/",
+  "documentation": "https://github.com/fengniao-ai/fengniaoai-skill#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fengniao-ai/fengniaoai-skill.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fengniao-ai/fengniaoai-skill/issues"
+  },
   "tags": [
     "image-generation",
     "image-editing",
@@ -101,22 +110,27 @@
   "skills": {
     "fengniao-image-generate": {
       "entry": "skills/fengniao-image-generate/SKILL.md",
+      "description": "文生图、参考图改图、扩图和 2K/4K 生成式高清增强。",
       "status": "active"
     },
     "fengniao-image-tools": {
       "entry": "skills/fengniao-image-tools/SKILL.md",
+      "description": "抠图、透明底/白底、OCR 与文字坐标识别。",
       "status": "active"
     },
     "fengniao-image-translate": {
       "entry": "skills/fengniao-image-translate/SKILL.md",
+      "description": "图片文字翻译、语言映射和商品文字保护。",
       "status": "active"
     },
     "fengniao-video-translate": {
       "entry": "skills/fengniao-video-translate/SKILL.md",
+      "description": "视频字幕翻译、擦字幕、AI 配音和原声克隆。",
       "status": "active"
     },
     "fengniao-ecommerce-kit": {
       "entry": "skills/fengniao-ecommerce-kit/SKILL.md",
+      "description": "商品一致性控制、多用途主图和多渠道电商套图。",
       "status": "active"
     }
   }

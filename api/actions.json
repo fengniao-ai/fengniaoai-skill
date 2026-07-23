@@ -88,17 +88,17 @@
       "status": "active",
       "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
       "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品"],
-      "required": ["image|reference_image_urls", "prompt"],
-      "optional": ["aspect_ratio", "model_alias", "customer_id"],
+      "required": ["image|reference_images|reference_image_urls", "prompt"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
         "aspect_ratio": "original",
         "model_alias": "pro-1k"
       },
-      "input_modes": ["https-url"],
+      "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
       "command": "node scripts/fengniaoai.mjs image transform",
       "ask_if_missing": {
-        "image|reference_image_urls": "请提供一张或多张公网可访问的 HTTPS 参考图片链接。当前参考图生图暂不直接接收本地附件。",
+        "image|reference_images|reference_image_urls": "请提供一张或多张本地图片或 HTTPS 参考图片；多张图片请按主图、补充角度或细节的顺序提供。",
         "prompt": "你希望保留什么、改变什么？例如“保留商品和包装文字，把背景换成夏日海边”。"
       },
       "reference": "references/image-generation.md"
@@ -109,16 +109,16 @@
       "status": "active",
       "description": "自然补全画面外区域，将图片扩为横版、竖版、方图或指定比例。",
       "triggers": ["扩图", "图片扩图", "扩展图片", "扩成横版", "扩成竖版", "改成16:9", "补全背景", "比例转换"],
-      "required": ["image|reference_image_urls", "aspect_ratio"],
-      "optional": ["prompt", "model_alias", "customer_id"],
+      "required": ["image|reference_images|reference_image_urls", "aspect_ratio"],
+      "optional": ["prompt", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
         "model_alias": "pro-1k"
       },
-      "input_modes": ["https-url"],
+      "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
       "command": "node scripts/fengniaoai.mjs image expand",
       "ask_if_missing": {
-        "image|reference_image_urls": "请提供要扩展图片的公网 HTTPS 链接。当前扩图暂不直接接收本地附件。",
+        "image|reference_images|reference_image_urls": "请提供要扩展的本地图片或 HTTPS 图片；多张图片请按主图、补充角度或细节的顺序提供。",
         "aspect_ratio": "你想扩成横版、竖版还是方图？也可以直接告诉我 16:9、3:4、9:16 等比例。"
       },
       "reference": "references/image-generation.md"
@@ -129,17 +129,17 @@
       "status": "active",
       "description": "通过生成式高清重绘得到 2K 或 4K 图片，不承诺像素级无损。",
       "triggers": ["变成2K", "变成4K", "2K放大", "4K放大", "图片高清", "高清放大", "高清增强", "高清重绘", "放大到4K", "提升分辨率"],
-      "required": ["image|reference_image_urls"],
-      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id"],
+      "required": ["image|reference_images|reference_image_urls"],
+      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
         "resolution": "2k",
         "aspect_ratio": "original"
       },
-      "input_modes": ["https-url"],
+      "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
       "command": "node scripts/fengniaoai.mjs image enhance",
       "ask_if_missing": {
-        "image|reference_image_urls": "请提供要增强图片的公网 HTTPS 链接。当前高清重绘暂不直接接收本地附件。"
+        "image|reference_images|reference_image_urls": "请提供要增强的本地图片或 HTTPS 图片；多张图片请按主图、补充角度或细节的顺序提供。"
       },
       "reference": "references/image-generation.md"
     },
@@ -241,14 +241,14 @@
       "status": "active",
       "description": "创建单个或批量视频翻译任务，不等待任务完成。",
       "triggers": ["创建视频翻译任务", "批量视频翻译", "提交视频翻译"],
-      "required": ["video_url|video_urls", "source_language", "target_language", "translation_type_list"],
+      "required": ["video|videos|video_url|video_urls", "source_language", "target_language", "translation_type_list"],
       "optional": ["subtitle", "tts", "customer_id", "custom_data"],
       "defaults": {},
-      "input_modes": ["https-url"],
+      "input_modes": ["https-url", "local-path"],
       "response_mode": "async-submit",
       "command": "node scripts/fengniaoai.mjs video translate-submit",
       "ask_if_missing": {
-        "video_url|video_urls": "请提供公网可访问的 HTTPS 视频地址。",
+        "video_url|video_urls": "请提供本地视频文件或 HTTPS 视频地址。",
         "source_language": "视频主要使用什么语言？",
         "target_language": "你希望翻译成哪种语言？",
         "translation_type_list": "你希望只翻译字幕，还是同时生成目标语言配音？"
@@ -278,14 +278,14 @@
       "status": "active",
       "description": "创建一个视频翻译任务并持续查询，支持字幕翻译、擦字幕、AI 配音和原声克隆。",
       "triggers": ["视频翻译", "翻译视频", "翻译这个视频", "视频字幕翻译", "擦掉原字幕", "生成双语字幕", "视频AI配音", "克隆原声"],
-      "required": ["video_url", "source_language", "target_language", "translation_type_list"],
+      "required": ["video|video_url", "source_language", "target_language", "translation_type_list"],
       "optional": ["subtitle", "tts", "timeout_seconds", "poll_interval_ms", "customer_id", "custom_data"],
       "defaults": {},
-      "input_modes": ["https-url"],
+      "input_modes": ["https-url", "local-path"],
       "response_mode": "poll",
       "command": "node scripts/fengniaoai.mjs video translate",
       "ask_if_missing": {
-        "video_url": "请提供公网可访问的 HTTPS 视频地址。",
+        "video_url": "请提供一个本地视频文件或 HTTPS 视频地址。",
         "source_language": "视频主要使用什么语言？",
         "target_language": "你希望翻译成哪种语言？",
         "translation_type_list": "你希望只翻译字幕，还是还要擦除原字幕或生成配音？"

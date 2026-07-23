@@ -16,13 +16,15 @@ npx -y skills add ./fengniaoai-skill --skill fengniaoai-skill -g
 npx -y skills add ./fengniaoai-skill --skill fengniaoai-skill -g -a codex
 ```
 
-后续将 `fengniaoai-skill` 发布为独立 Git 仓库后，市场安装命令使用标准形式：
+从公开 GitHub 仓库安装：
 
 ```bash
-npx -y skills add <公开 Git 仓库 URL> --skill fengniaoai-skill -g
+npx -y skills add https://github.com/fengniao-ai/fengniaoai-skill --skill fengniaoai-skill -g
 ```
 
-不要把当前私有 `business_server` 地址写进公开市场页面。发布时应使用只包含 Skill 包的公开仓库，确保用户不需要访问业务服务端源码。
+`fengniaoai-skill` 是唯一安装入口。5 个子 Skill、共享 CLI、接口定义和参考资料都会随根 Skill 一起安装，并由根 Skill 按用户意图加载；不要使用 `--full-depth` 把子 Skill 当成互相独立的软件包安装。
+
+“通用”指采用主流 `SKILL.md` 目录结构，并可由标准 `skills` CLI 安装到其支持的 Agent 客户端。实际运行仍要求客户端能够执行 Node.js 18+ 本地命令、读写任务文件并访问 HTTPS 网络；纯聊天、无 shell 或禁用文件系统/网络权限的平台不能直接执行本 Skill。
 
 ## 连接蜂鸟AI
 
@@ -68,7 +70,9 @@ node scripts/fengniaoai.mjs account configure --input-stdin
 - 一次只问一到两个关键问题，其他参数采用合理默认值。
 - 使用用户熟悉的表达，如“横版 16:9”“英文配音”“透明底”，不要让用户填写 API 字段。
 - 凭证缺失时保留已收集的任务内容；引导用户复制粘贴，自动配置并验证后从原处继续。
-- 抠图、OCR、图片翻译可以直接使用本地图片；参考图生图与视频翻译当前需要公网 HTTPS 链接，只在对应任务中提示一次。
+- 图片和视频能力都可以直接使用本地文件，也兼容公网 HTTPS 链接；本地素材的临时直传由 CLI 自动完成。
+- 用户只需发送文件。文件校验、临时上传、限流退避和必要的重新上传均由 CLI 自动完成，不要求用户提供公网链接或手工操作 OSS。
+- 隐私提示：用户主动提供的本地图片或视频会临时上传到蜂鸟AI进行处理；Skill 只上传当前任务需要的素材，不写入仓库，临时素材按接口有效期清理。
 - 调用 CLI 时将已安装的 Skill 根目录设为工作目录，再执行 `node scripts/fengniaoai.mjs ...`；不要从用户项目目录直接假设存在该脚本。
 
 ## 结果自动下载

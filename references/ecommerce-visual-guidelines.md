@@ -123,7 +123,7 @@
 
 ## 生图 Prompt 模板
 
-为每张图单独填写。将完成后的整段 Markdown 作为 `prompt` 字符串传给 `image transform`，参考商品图通过 `image` 或 `reference_image_urls` 单独传递。
+为每张图单独填写。将完成后的整段 Markdown 作为 `prompt` 字符串传给 `image transform`，参考商品图通过 `image`、`reference_images` 或 `reference_image_urls` 单独传递；多图同时传等长的 `reference_roles` 固定职责。
 
 ```markdown
 # 电商图片任务

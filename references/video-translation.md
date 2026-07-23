@@ -49,7 +49,7 @@ AI 配音还要求 `tts.voice_id` 支持目标语言。随 Skill 安装的完整
 
 - 创建：`POST /api/v1/video/translate/create`；查询：`POST /api/v1/video/translate/query`。
 - `video_url` 与 `video_urls` 必须二选一。批量最多 10 个且不能重复；单 URL 最长 1024 字符。
-- 只支持公网 HTTPS 视频，最长 30 分钟。常见后缀包括 mp4、flv、mov、avi、mkv、webm；服务端还接受 3gp、mpg、asf、wmv、ts、mxf。
+- 支持本地视频或公网 HTTPS 视频，最长 30 分钟。本地视频由 CLI 流式直传 OSS；常见后缀包括 mp4、flv、mov、avi、mkv、webm，服务端还接受 3gp、mpg、asf、wmv、ts、mxf。
 - `request_id` 长度 1–128；`custom_data` 最大 4 KB。
 - 当前实现不支持非空 `callback_url`，不要为异步任务配置回调地址。
 - `translation_type_list` 使用 `subtitle`、`speech` 或两者。
