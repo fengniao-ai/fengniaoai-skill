@@ -92,7 +92,7 @@
       "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
         "aspect_ratio": "original",
-        "model_alias": "pro-1k"
+        "model_alias": "tpro-1k"
       },
       "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
@@ -112,7 +112,7 @@
       "required": ["image|reference_images|reference_image_urls", "aspect_ratio"],
       "optional": ["prompt", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
-        "model_alias": "pro-1k"
+        "model_alias": "tpro-1k"
       },
       "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
@@ -133,7 +133,8 @@
       "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
         "resolution": "2k",
-        "aspect_ratio": "original"
+        "aspect_ratio": "original",
+        "model_alias": "tpro-1k"
       },
       "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",

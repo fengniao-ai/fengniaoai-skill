@@ -897,7 +897,7 @@ async function generateImage(action, input, refreshIndex = 0) {
       request_id: currentRequestId,
       prompt: promptWithReferenceRoles(requireString(input, "prompt", "图片修改要求"), input, referenceCount),
       ...references,
-      model_alias: input.model_alias || "pro-1k",
+      model_alias: input.model_alias || "tpro-1k",
       aspect_ratio: input.aspect_ratio || "original",
     }
   } else if (action === "expand") {
@@ -907,10 +907,11 @@ async function generateImage(action, input, refreshIndex = 0) {
       request_id: currentRequestId,
       prompt: promptWithReferenceRoles(input.prompt || "Extend the image naturally to the requested aspect ratio. Preserve the main subject, product identity, visible text, colors, lighting, and original composition. Only generate content needed outside the original canvas.", input, referenceCount),
       ...references,
-      model_alias: input.model_alias || "pro-1k",
+      model_alias: input.model_alias || "tpro-1k",
       aspect_ratio: requireString(input, "aspect_ratio", "目标图片比例"),
     }
   } else {
+    const explicitResolution = input.resolution !== undefined && input.resolution !== null && input.resolution !== ""
     const resolution = String(input.resolution || "2k").toLowerCase()
     if (!new Set(["2k", "4k"]).has(resolution)) throw new SkillError("INVALID_INPUT", "高清增强 resolution 仅支持 2k 或 4k。", { requestId: currentRequestId })
     const referenceCount = referenceUrls(input).length
@@ -919,7 +920,7 @@ async function generateImage(action, input, refreshIndex = 0) {
       request_id: currentRequestId,
       prompt: promptWithReferenceRoles(input.prompt || "Create a high-resolution redraw of the reference image. Preserve the subject identity, product details, visible text, composition, colors, and lighting. Do not add or remove content.", input, referenceCount),
       ...references,
-      model_alias: input.model_alias || (resolution === "4k" ? "pro-4k" : "pro-2k"),
+      model_alias: input.model_alias || (explicitResolution ? (resolution === "4k" ? "pro-4k" : "pro-2k") : "tpro-1k"),
       aspect_ratio: input.aspect_ratio || "original",
     }
   }
@@ -997,12 +998,14 @@ async function ocrStatus(input) {
   const queryKey = String(input.query_key || "2")
   const payload = await apiRequest("/api/v1/editor/task/info", { ids: [{ key: queryKey, value: taskId }] }, currentRequestId)
   const task = firstTask(payload) || {}
-  const state = task.status || "pending"
+  const rawState = task.status
+  const state = ({ 1: "pending", 2: "processing", 3: "completed", 4: "failed", 5: "permission_denied" })[String(rawState)] || rawState || "pending"
   if (state === "not_found") throw new SkillError("TASK_NOT_FOUND", task.errMsg || "OCR 任务不存在或结果已过期。", { requestId: currentRequestId })
   if (state === "failed" || state === "error") throw new SkillError("TEMPORARY_UNAVAILABLE", "OCR 任务处理失败，请检查图片后重试。", { retryable: true, requestId: currentRequestId })
+  if (state === "permission_denied") throw new SkillError("CREDITS_INSUFFICIENT", "OCR 任务没有权限执行，请检查项目权限或剩余点数。", { requestId: currentRequestId })
   return success("image.ocr-status", currentRequestId, state, {
     taskId,
-    data: { texts: task.result?.texts || [], progress: task.progress ?? null },
+    data: { texts: task.result?.texts || [], progress: task.progress ?? null, raw_status: rawState ?? null },
   })
 }
 
