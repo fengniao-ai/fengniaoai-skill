@@ -35,8 +35,8 @@ description: >-
 
 ## 执行顺序
 
-1. 白底主图优先使用 `fengniao-image-tools` 的白底抠图输出；只有需要改变画面时才使用生成式改图。
-2. 使用 `fengniao-image-generate` 的 `image transform` 逐张生成主图、场景图和卖点图；每张使用新的 `request_id`。
+1. 白底主图使用 `fengniao-image-generate` 的 `image transform`；只有用户明确说“抠图”“去背景”“移除背景”或“抠出主体”时，才使用 `fengniao-image-tools` 的抠图输出。
+2. 使用 `fengniao-image-generate` 的 `image transform` 逐张生成白底主图、场景图和卖点图；每张使用新的 `request_id`。
 3. 多平台比例使用生图扩图能力，不调用旧扩图接口。
 4. 仅在用户要求本地化版本时使用 `fengniao-image-translate`。
 5. 每张都使用同一组有序商品参考图；第 1 张作为主商品基准，侧面、背面、包装和细节图按固定顺序追加。已有经用户认可的主视觉时，可追加为风格参考，不能替代原商品图。

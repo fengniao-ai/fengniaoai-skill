@@ -49,8 +49,8 @@ description: >-
 
 ## 按用户意图路由
 
-- 文生图、参考图改图、扩图、比例转换、2K/4K 生成式高清重绘：读取 `skills/fengniao-image-generate/SKILL.md`。
-- 抠图、透明底、白底、主体裁切、OCR、文字或坐标识别：读取 `skills/fengniao-image-tools/SKILL.md`。
+- 文生图、参考图改图、换背景、白底图、白底主图、扩图、比例转换、2K/4K 生成式高清重绘：读取 `skills/fengniao-image-generate/SKILL.md`。用户只说“做成白底图”时使用 `image transform`，不能据此调用抠图。
+- 只有用户明确说“抠图”“去背景”“移除背景”“抠出主体”时，才读取 `skills/fengniao-image-tools/SKILL.md` 并调用抠图；透明底、白底或裁切只决定明确抠图后的输出形式。OCR、文字或坐标识别也读取该子 Skill。
 - AI 翻译中的图片翻译：读取 `skills/fengniao-image-translate/SKILL.md`。
 - AI 翻译中的视频翻译、擦字幕、AI 配音或原声克隆：读取 `skills/fengniao-video-translate/SKILL.md`。
 - AI 生图中的电商套图：读取 `skills/fengniao-ecommerce-kit/SKILL.md`。
@@ -92,15 +92,31 @@ node scripts/fengniaoai.mjs account configure --input-stdin
 
 - 配置成功后立即调用 `account balance` 验证连接，再从原任务继续，不让用户重新描述需求或上传素材。
 - 如果运行环境不能安全传递标准输入，引导用户改用 Agent 平台的环境变量/Secret 设置，不把 Api key 放进命令行参数。
-- 批量执行前或用户询问余额时查询剩余点数：
+- 以下节点必须查询实时剩余点数：首次配置成功后；用户主动询问余额；单次付费工作流完成后；批量付费工作流开始前和整批结束后；用户表示“已充值”“充值好了”或要求刷新余额时。
 
 ```bash
 node scripts/fengniaoai.mjs account balance --input-json '{}'
 ```
 
-- 点数不足时保留任务参数，不自动重试，引导用户登录 https://fengniaoai.com/ 获取点数。
+- 单次任务只在最终交付前刷新一次；批量任务不逐张查询，整批完成后统一刷新一次。不要按固定时间周期轮询余额。
+- 只把 `account balance` 的最新响应称为“当前余额”。禁止使用上次余额减去预计消耗来推算或声称余额已更新；查询失败时说明“任务已完成，但余额暂时未能刷新”，不要虚构数值，也不要将已完成任务改判为失败。
+- 点数不足时保留任务参数，不自动重试付费操作，引导用户登录 https://fengniaoai.com/ 获取点数。用户明确表示充值完成后，立即查询一次；如果余额尚未更新，可在约 3 秒和 10 秒后各重查一次，最多查询 3 次，不持续后台轮询。确认点数足够后继续原任务，不要求用户重新描述或上传素材。
 
 安装与首次配置说明读取 `references/getting-started.md`。
+
+## 版本检查与升级
+
+- 在用户安装后的正常使用中执行 `skill check-update`。CLI 会把检查结果缓存 24 小时；同一周期内不会重复访问 GitHub。
+- 没有新版或检查失败时保持静默，不能打断当前任务，也不能把网络检查失败说成蜂鸟AI业务失败。
+- 发现新版时，在当前任务完成后简短提醒：“蜂鸟AI Skill 有新版本可用，要现在升级吗？”不要反复提醒，也不要在用户确认前修改已安装文件。
+- 用户同意后，按安装范围执行标准 `skills update`。默认 GitHub 安装方式是全局安装，可执行：
+
+```bash
+npx -y skills update fengniaoai-skill -g -y
+```
+
+- 无法确认是全局还是项目安装时，先用 `npx -y skills list -g --json` 和 `npx -y skills list --json` 判断，再分别使用 `-g` 或 `-p`；不要同时安装第二份。
+- 升级完成后提醒用户重新打开 Agent 客户端或开始新对话，以加载新版说明。升级不会删除用户级蜂鸟AI凭证。
 
 ## 安全与执行规则
 

@@ -66,6 +66,24 @@ npx -y skills add https://github.com/fengniao-ai/fengniaoai-skill --skill fengni
 npx -y skills add . --skill fengniaoai-skill -g
 ```
 
+### 升级 Skill
+
+GitHub 发布新版本后，全局安装的用户执行：
+
+```bash
+npx -y skills update fengniaoai-skill -g -y
+```
+
+项目级安装则在对应项目目录执行：
+
+```bash
+npx -y skills update fengniaoai-skill -p -y
+```
+
+从 `1.1.0` 开始，Skill 在正常使用时最多每 24 小时检查一次 GitHub 版本。没有更新或检查失败时不会打断任务；发现新版时，Agent 会在当前任务结束后询问是否升级，获得同意后才执行更新。旧版本无法远程获得提醒能力，需要先手动升级一次。
+
+升级完成后，重新打开 Agent 客户端或开始新对话以加载新版说明。蜂鸟AI凭证保存在用户配置目录中，不会被升级覆盖。
+
 这是一个根 Skill 入口和 5 个内置子 Skill 组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译和电商套图会随根 Skill 一起安装，并由 Agent 按任务自动路由，不需要使用 `--full-depth` 分别安装。
 
 兼容性边界：本项目采用 `SKILL.md`、相对路径资源和本地 CLI 的通用 Agent Skills 结构，并提供 `agents/openai.yaml` 与 `claw.json`。支持 Agent Skills、允许执行本地命令、读写任务文件且能访问 HTTPS 网络的 Agent 客户端可以直接安装使用。不同 Agent 平台尚未统一清单格式和权限模型，因此不承诺所有纯聊天或禁止 shell、文件系统、网络访问的平台零适配运行。
@@ -127,8 +145,8 @@ Agent 会优先展示本地文件。如果某个产物下载失败，已完成�
 | Skill | 用途 |
 | --- | --- |
 | `fengniaoai-skill` | 根入口、自然语言路由、账号配置与点数查询 |
-| `fengniao-image-generate` | 文生图、参考图改图、扩图、2K/4K 高清增强 |
-| `fengniao-image-tools` | 抠图、透明底/白底、OCR 与文字坐标识别 |
+| `fengniao-image-generate` | 文生图、参考图改图、白底图、扩图、2K/4K 高清增强 |
+| `fengniao-image-tools` | 用户明确要求时执行抠图/去背景，以及 OCR 与文字坐标识别 |
 | `fengniao-image-translate` | 图片翻译、语言与引擎选择、商品文字保护 |
 | `fengniao-video-translate` | 视频字幕翻译、擦字幕、AI 配音与原声克隆 |
 | `fengniao-ecommerce-kit` | 商品一致性控制和多渠道电商套图工作流 |

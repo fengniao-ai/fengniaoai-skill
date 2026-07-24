@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url"
 
 const DEFAULT_BASE_URL = "https://api.fengniaoai.com"
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/fengniao-ai/fengniaoai-skill/main/claw.json"
 const DEFAULT_MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 const LOGIN_URL = "https://fengniaoai.com/"
 const KEY_URL = "https://fengniaoai.com/userCenter/key"
@@ -120,6 +121,7 @@ function usage() {
     usage: "node scripts/fengniaoai.mjs <group> <action> [--input-json '<JSON>' | --input-stdin]",
     actions: [
       "account configure|balance",
+      "skill check-update",
       "image generate|transform|expand|enhance|cutout|ocr-submit|ocr-status|ocr|translate",
       "video translate-submit|translate-status|translate",
     ],
@@ -172,11 +174,19 @@ function requestId(input) {
   return `agent_${randomUUID().replaceAll("-", "")}`
 }
 
+function configDirectory() {
+  const configRoot = String(process.env.XDG_CONFIG_HOME || "").trim()
+  return join(configRoot ? resolve(configRoot) : join(homedir(), ".config"), "fengniaoai")
+}
+
 function credentialsFile() {
   const explicit = String(process.env.FENGNIAO_CREDENTIALS_FILE || "").trim()
   if (explicit) return resolve(explicit)
-  const configRoot = String(process.env.XDG_CONFIG_HOME || "").trim()
-  return join(configRoot ? resolve(configRoot) : join(homedir(), ".config"), "fengniaoai", "credentials.json")
+  return join(configDirectory(), "credentials.json")
+}
+
+function updateStateFile() {
+  return join(configDirectory(), "update-check.json")
 }
 
 async function credentials() {
@@ -822,6 +832,99 @@ async function accountBalance(input) {
   return success("account.balance", currentRequestId, "completed", { data: { petrolpaks: payload.data } })
 }
 
+function parseVersion(value) {
+  const match = String(value || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/)
+  if (!match) return null
+  return { numbers: match.slice(1, 4).map(Number), prerelease: match[4] || "" }
+}
+
+function compareVersions(leftValue, rightValue) {
+  const left = parseVersion(leftValue)
+  const right = parseVersion(rightValue)
+  if (!left || !right) return null
+  for (let index = 0; index < 3; index += 1) {
+    if (left.numbers[index] !== right.numbers[index]) return left.numbers[index] > right.numbers[index] ? 1 : -1
+  }
+  if (left.prerelease === right.prerelease) return 0
+  if (!left.prerelease) return 1
+  if (!right.prerelease) return -1
+  return left.prerelease.localeCompare(right.prerelease)
+}
+
+async function localSkillVersion() {
+  try {
+    const manifest = JSON.parse(await readFile(join(SKILL_ROOT, "claw.json"), "utf8"))
+    if (manifest?.name !== "fengniaoai-skill" || !parseVersion(manifest.version)) throw new Error("invalid manifest")
+    return manifest.version
+  } catch {
+    throw new SkillError("TEMPORARY_UNAVAILABLE", "无法读取当前 Skill 版本，暂时不能检查更新。")
+  }
+}
+
+async function saveUpdateState(state) {
+  const file = updateStateFile()
+  const directory = dirname(file)
+  const temporaryFile = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await chmod(directory, 0o700)
+    await writeFile(temporaryFile, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
+    await chmod(temporaryFile, 0o600)
+    await rename(temporaryFile, file)
+    await chmod(file, 0o600)
+  } catch {
+    try { await unlink(temporaryFile) } catch { /* noop */ }
+  }
+}
+
+async function skillCheckUpdate(input) {
+  const installedVersion = await localSkillVersion()
+  const cacheHours = boundedInteger(input.cache_hours, 24, { min: 1, max: 168 })
+  const now = Date.now()
+  if (input.force !== true) {
+    try {
+      const cached = JSON.parse(await readFile(updateStateFile(), "utf8"))
+      const checkedAt = Date.parse(cached.checked_at || "")
+      if (cached.installed_version === installedVersion && Number.isFinite(checkedAt) && now - checkedAt < cacheHours * 60 * 60 * 1000) {
+        return success("skill.check-update", requestId(input), "completed", { data: { ...cached, cache_hit: true } })
+      }
+    } catch { /* no usable cache */ }
+  }
+
+  const manifestUrl = String(process.env.FENGNIAO_UPDATE_MANIFEST_URL || UPDATE_MANIFEST_URL).trim()
+  let state
+  try {
+    const response = await fetch(manifestUrl, {
+      headers: { Accept: "application/json", "User-Agent": `fengniaoai-skill/${installedVersion}` },
+      redirect: "follow",
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const remoteManifest = await response.json()
+    const latestVersion = String(remoteManifest?.version || "").trim()
+    const comparison = remoteManifest?.name === "fengniaoai-skill" ? compareVersions(latestVersion, installedVersion) : null
+    if (comparison === null) throw new Error("invalid remote manifest")
+    state = {
+      installed_version: installedVersion,
+      latest_version: latestVersion,
+      update_available: comparison > 0,
+      checked_at: new Date(now).toISOString(),
+      repository: "https://github.com/fengniao-ai/fengniaoai-skill",
+      update_command: "npx -y skills update fengniaoai-skill -g -y",
+    }
+  } catch {
+    state = {
+      installed_version: installedVersion,
+      latest_version: null,
+      update_available: null,
+      checked_at: new Date(now).toISOString(),
+      check_status: "unavailable",
+    }
+  }
+  await saveUpdateState(state)
+  return success("skill.check-update", requestId(input), "completed", { data: { ...state, cache_hit: false } })
+}
+
 function referenceUrls(input) {
   if (Array.isArray(input.reference_image_keys)) return input.reference_image_keys
   if (Array.isArray(input.reference_images)) return input.reference_images
@@ -1270,6 +1373,7 @@ async function videoTranslate(input) {
 async function run(group, action, input) {
   if (group === "account" && action === "configure") return accountConfigure(input)
   if (group === "account" && action === "balance") return accountBalance(input)
+  if (group === "skill" && action === "check-update") return skillCheckUpdate(input)
   if (group === "image" && new Set(["generate", "transform", "expand", "enhance"]).has(action)) return generateImage(action, input)
   if (group === "image" && action === "cutout") return cutout(input)
   if (group === "image" && action === "ocr-submit") return ocrSubmit(input)

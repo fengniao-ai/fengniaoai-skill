@@ -62,6 +62,24 @@
       "ask_if_missing": {},
       "reference": "references/account-and-errors.md"
     },
+    "skill.check-update": {
+      "label": "检查 Skill 更新",
+      "skill": "fengniaoai-skill",
+      "status": "active",
+      "description": "低频检查 GitHub 上是否存在更新版本；结果缓存 24 小时，不影响正常业务任务。",
+      "triggers": ["检查Skill更新", "检查更新", "Skill升级", "升级蜂鸟AI"],
+      "required": [],
+      "optional": ["force", "cache_hours"],
+      "defaults": {
+        "force": false,
+        "cache_hours": 24
+      },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs skill check-update",
+      "ask_if_missing": {},
+      "reference": "references/getting-started.md"
+    },
     "image.generate": {
       "label": "从零生成图片",
       "skill": "fengniao-image-generate",
@@ -87,7 +105,7 @@
       "skill": "fengniao-image-generate",
       "status": "active",
       "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
-      "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品"],
+      "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品", "白底图", "白底主图", "做成白底", "纯白背景"],
       "required": ["image|reference_images|reference_image_urls", "prompt"],
       "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
@@ -148,8 +166,8 @@
       "label": "智能抠图",
       "skill": "fengniao-image-tools",
       "status": "active",
-      "description": "识别主体并输出透明底、白底或主体裁切结果。",
-      "triggers": ["抠图", "图片抠图", "抠出商品", "去背景", "透明底", "白底图", "主体裁切", "移除背景"],
+      "description": "仅在用户明确要求抠图、去背景、移除背景或抠出主体时，识别主体并输出用户指定的透明底、白底或主体裁切结果。",
+      "triggers": ["抠图", "图片抠图", "抠出商品", "抠出主体", "去背景", "移除背景"],
       "required": ["image"],
       "optional": ["subject_type", "background", "customer_id"],
       "defaults": {

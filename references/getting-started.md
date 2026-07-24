@@ -26,6 +26,24 @@ npx -y skills add https://github.com/fengniao-ai/fengniaoai-skill --skill fengni
 
 “通用”指采用主流 `SKILL.md` 目录结构，并可由标准 `skills` CLI 安装到其支持的 Agent 客户端。实际运行仍要求客户端能够执行 Node.js 18+ 本地命令、读写任务文件并访问 HTTPS 网络；纯聊天、无 shell 或禁用文件系统/网络权限的平台不能直接执行本 Skill。
 
+## 检查更新与升级
+
+新版 Skill 会在正常使用时通过 `skill check-update` 最多每 24 小时检查一次 GitHub 版本。没有更新或检查失败时保持静默；发现新版时由 Agent 在当前任务结束后询问用户是否升级，不会未经确认修改已安装文件。
+
+全局安装的用户可以执行：
+
+```bash
+npx -y skills update fengniaoai-skill -g -y
+```
+
+项目级安装则在项目目录执行：
+
+```bash
+npx -y skills update fengniaoai-skill -p -y
+```
+
+升级后重新打开 Agent 客户端或开始新对话。凭证保存在用户级配置目录，不会随 Skill 更新被覆盖。首次提供自动检查功能之前安装的旧版本不能自行获得这段逻辑，需要先手动执行一次升级。
+
 ## 连接蜂鸟AI
 
 安装本身不要求填写凭证。用户第一次真正执行图片或视频任务时，如果尚未配置，再引导完成：
