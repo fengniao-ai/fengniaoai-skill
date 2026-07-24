@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { createReadStream, createWriteStream } from "node:fs"
-import { access, chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
+import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path"
 import { homedir } from "node:os"
 import { createHash, randomUUID } from "node:crypto"
+import { spawn } from "node:child_process"
 import { Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { fileURLToPath } from "node:url"
@@ -17,7 +18,12 @@ const LOGIN_URL = "https://fengniaoai.com/"
 const KEY_URL = "https://fengniaoai.com/userCenter/key"
 const TERMINAL_STATES = new Set(["completed", "failed", "error", "not_found", "partial_failed"])
 const IMAGE_MODELS = new Set(["tpro-1k", "tpro-2k", "pro-1k", "pro-2k", "pro-4k"])
+const IMAGE_MODEL_CREDITS = new Map([["tpro-1k", 10], ["tpro-2k", 12], ["pro-1k", 12], ["pro-2k", 12], ["pro-4k", 18]])
 const IMAGE_RATIOS = new Set(["1:1", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2", "original"])
+const IMAGE_BATCH_ACTIONS = new Set(["generate", "transform", "expand", "enhance"])
+const IMAGE_BATCH_TERMINAL_STATES = new Set(["completed", "failed", "cancelled"])
+const IMAGE_BATCH_FINAL_STATES = new Set(["completed", "cancelled", "partial_failed"])
+const IMAGE_BATCH_GLOBAL_PAUSE_ERRORS = new Set(["RATE_LIMITED", "CREDITS_INSUFFICIENT", "CREDENTIALS_MISSING", "AUTH_ERROR", "PERMISSION_DENIED"])
 const IMAGE_LANGUAGE_ALIASES = new Map([
   ["自动", "auto"], ["自动检测", "auto"], ["自动识别", "auto"],
   ["中文", "zh"], ["简体中文", "zh"], ["中文简体", "zh"], ["中文（简）", "zh"], ["中文（简体）", "zh"], ["汉语", "zh"], ["chinese", "zh"],
@@ -122,7 +128,7 @@ function usage() {
     actions: [
       "account configure|balance",
       "skill check-update",
-      "image generate|transform|expand|enhance|cutout|ocr-submit|ocr-status|ocr|translate",
+      "image generate|transform|expand|enhance|batch-submit|batch-list|batch-status|batch-pause|batch-resume|batch-retry|batch-cancel|cutout|ocr-submit|ocr-status|ocr|translate",
       "video translate-submit|translate-status|translate",
     ],
   }
@@ -187,6 +193,63 @@ function credentialsFile() {
 
 function updateStateFile() {
   return join(configDirectory(), "update-check.json")
+}
+
+function batchRegistryFile() {
+  return join(configDirectory(), "batches.json")
+}
+
+async function withBatchRegistryLock(operation) {
+  const registry = batchRegistryFile()
+  const lockFile = `${registry}.lock`
+  await mkdir(dirname(registry), { recursive: true, mode: 0o700 })
+  let lock
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      lock = await open(lockFile, "wx", 0o600)
+      break
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      try {
+        const lockStat = await stat(lockFile)
+        if (Date.now() - lockStat.mtimeMs > 30000) {
+          await unlink(lockFile)
+          continue
+        }
+      } catch (statError) {
+        if (statError?.code !== "ENOENT") throw statError
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
+    }
+  }
+  if (!lock) throw new Error("batch registry lock timeout")
+  try {
+    return await operation(registry)
+  } finally {
+    try { await lock.close() } catch { /* noop */ }
+    try { await unlink(lockFile) } catch { /* noop */ }
+  }
+}
+
+async function readBatchRegistry(registry = batchRegistryFile()) {
+  try {
+    const parsed = JSON.parse(await readFile(registry, "utf8"))
+    return Array.isArray(parsed?.batches) ? parsed : { schema_version: "1.0", batches: [] }
+  } catch (error) {
+    if (error?.code === "ENOENT") return { schema_version: "1.0", batches: [] }
+    throw error
+  }
+}
+
+async function registerBatch(manifest, paths) {
+  await withBatchRegistryLock(async (registryFile) => {
+    const registry = await readBatchRegistry(registryFile)
+    const entry = { batch_id: manifest.batch_id, batch_dir: paths.directory, created_at: manifest.created_at }
+    registry.schema_version = "1.0"
+    registry.updated_at = new Date().toISOString()
+    registry.batches = [entry, ...registry.batches.filter((item) => item?.batch_id !== manifest.batch_id)].slice(0, 200)
+    await writeJsonAtomic(registryFile, registry)
+  })
 }
 
 async function credentials() {
@@ -662,11 +725,7 @@ function safeFilePart(value, fallback) {
   return cleaned || fallback
 }
 
-function prepareDownloadOptions(input) {
-  const enabled = input.download_artifacts === undefined
-    ? booleanSetting(process.env.FENGNIAO_AUTO_DOWNLOAD, true)
-    : booleanSetting(input.download_artifacts, true)
-  if (!enabled) return { enabled: false }
+function resolveOutputDirectory(input = {}) {
   const explicitDirectory = String(input.output_dir || process.env.FENGNIAO_OUTPUT_DIR || "").trim()
   const currentDirectory = resolve(process.cwd())
   const outputDirectory = explicitDirectory
@@ -677,6 +736,15 @@ function prepareDownloadOptions(input) {
   if (isInside(SKILL_ROOT, outputDirectory)) {
     throw new SkillError("INVALID_INPUT", "不能把生成结果写入 Skill 安装目录，请改用工作区 output 目录或其他输出目录。")
   }
+  return outputDirectory
+}
+
+function prepareDownloadOptions(input) {
+  const enabled = input.download_artifacts === undefined
+    ? booleanSetting(process.env.FENGNIAO_AUTO_DOWNLOAD, true)
+    : booleanSetting(input.download_artifacts, true)
+  if (!enabled) return { enabled: false }
+  const outputDirectory = resolveOutputDirectory(input)
   const maximumBytes = Number(process.env.FENGNIAO_MAX_DOWNLOAD_BYTES || DEFAULT_MAX_DOWNLOAD_BYTES)
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     throw new SkillError("INVALID_INPUT", "FENGNIAO_MAX_DOWNLOAD_BYTES 必须是大于 0 的整数。")
@@ -1045,6 +1113,714 @@ async function generateImage(action, input, refreshIndex = 0) {
   })
 }
 
+function batchPaths(batchDirectory) {
+  const directory = resolve(batchDirectory)
+  return {
+    directory,
+    manifest: join(directory, "manifest.json"),
+    control: join(directory, "control.json"),
+    progress: join(directory, "progress.json"),
+    results: join(directory, "results"),
+    lock: join(directory, ".worker.lock"),
+    cancelled: join(directory, ".cancelled"),
+  }
+}
+
+async function writeJsonAtomic(file, value, mode = 0o600) {
+  const temporaryFile = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+    await writeFile(temporaryFile, `${JSON.stringify(value, null, 2)}\n`, { mode })
+    await rename(temporaryFile, file)
+    await chmod(file, mode)
+  } catch (error) {
+    try { await unlink(temporaryFile) } catch { /* noop */ }
+    throw error
+  }
+}
+
+async function readBatchManifest(batchDirectory) {
+  const paths = batchPaths(batchDirectory)
+  try {
+    const manifest = JSON.parse(await readFile(paths.manifest, "utf8"))
+    if (manifest?.schema_version !== "1.0" || !manifest?.batch_id || !Array.isArray(manifest.tasks)) throw new Error("invalid batch manifest")
+    return { manifest, paths }
+  } catch {
+    throw new SkillError("INVALID_INPUT", "找不到有效的蜂鸟AI批量任务，请检查 batch_dir。")
+  }
+}
+
+function batchSummary(manifest) {
+  const summary = { total: manifest.tasks.length, pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0 }
+  for (const task of manifest.tasks) {
+    if (summary[task.status] !== undefined) summary[task.status] += 1
+  }
+  summary.finished = summary.completed + summary.failed + summary.cancelled
+  summary.progress_percent = summary.total ? Math.floor((summary.finished / summary.total) * 100) : 0
+  summary.credits_used = manifest.tasks.reduce((total, task) => total + Number(task.result?.usage?.credits_used || 0), 0)
+  return summary
+}
+
+function publicBatchData(manifest, paths, { includeTasks = false } = {}) {
+  const tasks = manifest.tasks.map((task) => ({
+    id: task.id,
+    action: task.action,
+    status: task.status,
+    request_id: task.request_id,
+    attempts: task.attempts,
+    retryable: Boolean(task.error?.retryable),
+    error_type: task.error?.error_type || null,
+    user_hint: task.error?.user_hint || null,
+    artifacts: task.result?.artifacts || [],
+    usage: task.result?.usage || {},
+    started_at: task.started_at || null,
+    finished_at: task.finished_at || null,
+  }))
+  const recent = tasks
+    .filter((task) => IMAGE_BATCH_TERMINAL_STATES.has(task.status))
+    .sort((left, right) => Date.parse(right.finished_at || 0) - Date.parse(left.finished_at || 0))
+    .slice(0, 10)
+  return {
+    batch_id: manifest.batch_id,
+    batch_dir: paths.directory,
+    state: manifest.state,
+    summary: batchSummary(manifest),
+    estimated_credits: manifest.estimated_credits,
+    concurrency: manifest.concurrency,
+    preview_count: manifest.preview_count,
+    preview_approved: manifest.preview_approved,
+    pause_reason: manifest.pause_reason || null,
+    pause_error: manifest.pause_error || null,
+    registry_warning: manifest.registry_warning || null,
+    results_dir: paths.results,
+    recent_tasks: recent,
+    ...(includeTasks ? { tasks } : {}),
+  }
+}
+
+async function persistBatch(manifest, paths) {
+  manifest.updated_at = new Date().toISOString()
+  await writeJsonAtomic(paths.manifest, manifest)
+  await writeJsonAtomic(paths.progress, {
+    batch_id: manifest.batch_id,
+    state: manifest.state,
+    updated_at: manifest.updated_at,
+    summary: batchSummary(manifest),
+    pause_reason: manifest.pause_reason || null,
+  })
+}
+
+function batchReferenceField(input = {}) {
+  return ["image", "reference_images", "reference_image_urls", "reference_image_keys"].find((field) => input[field] !== undefined)
+}
+
+function defaultBatchAction(input, shared) {
+  if (input.action !== undefined) return { action: String(input.action).trim(), explicit: true }
+  return { action: batchReferenceField(shared) ? "transform" : "generate", explicit: false }
+}
+
+function normalizedBatchTask(rawTask, index, defaultAction) {
+  if (!rawTask || Array.isArray(rawTask) || typeof rawTask !== "object") throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项必须是对象。`)
+  const id = safeFilePart(rawTask.id || rawTask.name, `image-${String(index + 1).padStart(4, "0")}`)
+  const taskInput = rawTask.input && typeof rawTask.input === "object" && !Array.isArray(rawTask.input)
+    ? { ...rawTask.input }
+    : Object.fromEntries(Object.entries(rawTask).filter(([key]) => !["id", "name", "action"].includes(key)))
+  const inferredAction = defaultAction.explicit
+    ? defaultAction.action
+    : batchReferenceField(taskInput) ? "transform" : defaultAction.action
+  const action = String(rawTask.action || inferredAction || "generate").trim()
+  if (!IMAGE_BATCH_ACTIONS.has(action)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项 action 不受支持。`)
+  const currentRequestId = requestId({ request_id: taskInput.request_id })
+  delete taskInput.request_id
+  for (const field of ["quantity", "number", "count", "n"]) {
+    if (taskInput[field] !== undefined) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项不能设置 ${field}。`)
+  }
+  return {
+    id,
+    action,
+    request_id: currentRequestId,
+    input: taskInput,
+    status: "pending",
+    attempts: 0,
+    previous_request_ids: [],
+    result: null,
+    error: null,
+  }
+}
+
+function batchTaskModel(task, shared) {
+  const input = { ...shared, ...task.input }
+  if (input.model_alias) return String(input.model_alias)
+  if (task.action === "enhance" && input.resolution !== undefined && input.resolution !== null && input.resolution !== "") {
+    return String(input.resolution).toLowerCase() === "4k" ? "pro-4k" : "pro-2k"
+  }
+  return "tpro-1k"
+}
+
+function ensureBatchModelAndRatio(task, shared, index) {
+  const input = { ...shared, ...task.input }
+  const sourceFields = ["image", "reference_images", "reference_image_urls", "reference_image_keys"].filter((field) => input[field] !== undefined)
+  if (sourceFields.length > 1) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项只能使用一种参考图来源。`)
+  const model = batchTaskModel(task, shared)
+  if (!IMAGE_MODELS.has(model)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项模型不受支持。`)
+  if (task.action === "enhance" && input.resolution !== undefined && !["2k", "4k"].includes(String(input.resolution).toLowerCase())) {
+    throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项高清规格仅支持 2K 或 4K。`)
+  }
+  const ratio = input.aspect_ratio || (task.action === "generate" ? "1:1" : task.action === "expand" ? null : "original")
+  if (ratio !== null && !IMAGE_RATIOS.has(ratio)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项比例不受支持。`)
+  if (task.action === "generate" || task.action === "transform") requireString(input, "prompt", `批量任务第 ${index + 1} 项描述`)
+  if (task.action === "expand" && !ratio) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项缺少目标比例。`)
+  if (task.action !== "generate" && !batchReferenceField(input)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项缺少参考图。`)
+  return IMAGE_MODEL_CREDITS.get(model)
+}
+
+function launchBatchWorker(batchDirectory) {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "image", "batch-worker", "--input-json", JSON.stringify({ batch_dir: batchDirectory })], {
+    cwd: batchDirectory,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+  })
+  child.on("error", () => { /* batch-status will mark a worker that never starts as interrupted */ })
+  child.unref()
+  return child.pid
+}
+
+async function imageBatchSubmit(input) {
+  if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 1000) {
+    throw new SkillError("INVALID_INPUT", "批量生图 tasks 必须包含 1 到 1000 个任务。")
+  }
+  const shared = input.shared && typeof input.shared === "object" && !Array.isArray(input.shared) ? { ...input.shared } : {}
+  const defaultAction = defaultBatchAction(input, shared)
+  const tasks = input.tasks.map((task, index) => normalizedBatchTask(task, index, defaultAction))
+  const ids = new Set()
+  const requestIds = new Set()
+  let estimatedCredits = 0
+  tasks.forEach((task, index) => {
+    if (ids.has(task.id)) throw new SkillError("INVALID_INPUT", `批量任务 id 重复：${task.id}`)
+    if (requestIds.has(task.request_id)) throw new SkillError("INVALID_INPUT", `批量任务 request_id 重复：${task.request_id}`)
+    ids.add(task.id)
+    requestIds.add(task.request_id)
+    estimatedCredits += ensureBatchModelAndRatio(task, shared, index)
+  })
+  const concurrency = boundedInteger(input.concurrency, 10, { min: 1, max: 10 })
+  const defaultPreviewCount = tasks.length > 50 ? 3 : 0
+  const previewCount = boundedInteger(input.preview_count, defaultPreviewCount || 1, { min: 0, max: Math.min(10, tasks.length) })
+  const effectivePreviewCount = input.preview_count === 0 || defaultPreviewCount === 0 && input.preview_count === undefined ? 0 : previewCount
+  const batchId = `batch_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`
+  const root = join(resolveOutputDirectory(input), "batches")
+  const paths = batchPaths(join(root, batchId))
+  await mkdir(paths.results, { recursive: true, mode: 0o700 })
+  const manifest = {
+    schema_version: "1.0",
+    batch_id: batchId,
+    state: "awaiting_start_confirmation",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    concurrency,
+    preview_count: effectivePreviewCount,
+    preview_approved: effectivePreviewCount === 0,
+    cost_approved: false,
+    estimated_credits: estimatedCredits,
+    shared,
+    shared_prepared: null,
+    shared_refresh_index: 0,
+    download_artifacts: input.download_artifacts === undefined ? true : booleanSetting(input.download_artifacts, true),
+    tasks,
+    pause_reason: null,
+    pause_error: null,
+    worker_pid: null,
+  }
+  await persistBatch(manifest, paths)
+  await writeJsonAtomic(paths.control, { desired_state: "paused", updated_at: new Date().toISOString() })
+  try {
+    await registerBatch(manifest, paths)
+  } catch {
+    manifest.registry_warning = "批次已创建，但未写入最近批次索引；请保留本次返回的 batch_dir。"
+    try { await persistBatch(manifest, paths) } catch { /* the batch remains usable through batch_dir */ }
+  }
+  return success("image.batch-submit", batchId, "awaiting_confirmation", {
+    data: {
+      ...publicBatchData(manifest, paths),
+      confirmation_required: true,
+      confirmation_hint: `共 ${tasks.length} 张，预计消耗 ${estimatedCredits} 点。确认后开始${effectivePreviewCount ? `，先生成 ${effectivePreviewCount} 张样图` : ""}。`,
+      next_action: "image.batch-resume",
+    },
+  })
+}
+
+async function imageBatchList(input) {
+  const limit = boundedInteger(input.limit, 20, { min: 1, max: 100 })
+  const includeCompleted = input.include_completed === undefined ? true : booleanSetting(input.include_completed, true)
+  let registry
+  try {
+    registry = await readBatchRegistry()
+  } catch {
+    throw new SkillError("TEMPORARY_UNAVAILABLE", "最近批次索引暂时无法读取，请稍后重试。", { retryable: true })
+  }
+  const batches = []
+  let missingCount = 0
+  for (const entry of registry.batches) {
+    if (batches.length >= limit) break
+    try {
+      const result = await imageBatchStatus({ batch_dir: entry.batch_dir })
+      if (!includeCompleted && IMAGE_BATCH_FINAL_STATES.has(result.state)) continue
+      const data = result.data
+      batches.push({
+        batch_id: data.batch_id,
+        batch_dir: data.batch_dir,
+        created_at: entry.created_at || null,
+        state: data.state,
+        summary: data.summary,
+        estimated_credits: data.estimated_credits,
+        preview_count: data.preview_count,
+        pause_reason: data.pause_reason,
+        results_dir: data.results_dir,
+      })
+    } catch {
+      missingCount += 1
+    }
+  }
+  return success("image.batch-list", requestId(input), "completed", {
+    data: { batches, count: batches.length, missing_count: missingCount },
+  })
+}
+
+async function imageBatchStatus(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  const activeWorkerPid = await batchWorkerPid(manifest, paths)
+  const control = await readBatchControl(paths)
+  if (control.desired_state === "cancelled" && !activeWorkerPid && manifest.state !== "completed") {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+  } else if (["queued", "preparing", "running", "previewing"].includes(manifest.state) && !activeWorkerPid) {
+    const queuedAt = Date.parse(manifest.updated_at || "")
+    const startupGraceElapsed = manifest.state !== "queued" || !Number.isFinite(queuedAt) || Date.now() - queuedAt > 2000
+    if (control.desired_state === "paused") {
+      for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+      manifest.state = "paused"
+    } else if (startupGraceElapsed) {
+      for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+      manifest.state = "interrupted"
+      manifest.pause_reason = "WORKER_INTERRUPTED"
+      manifest.pause_error = { error_type: "WORKER_INTERRUPTED", retryable: true, user_hint: "批量后台任务意外中断，可以继续原批次。", code: null }
+      await writeBatchControl(paths, "paused")
+    }
+    if (manifest.state !== "queued") {
+      manifest.worker_pid = null
+      await persistBatch(manifest, paths)
+    }
+  }
+  return success("image.batch-status", manifest.batch_id, manifest.state, {
+    data: publicBatchData(manifest, paths, { includeTasks: input.include_tasks === true }),
+  })
+}
+
+async function writeBatchControl(paths, desiredState) {
+  if (desiredState === "cancelled") {
+    await writeJsonAtomic(paths.cancelled, { cancelled_at: new Date().toISOString() })
+  } else {
+    try {
+      await access(paths.cancelled)
+      return { desired_state: "cancelled" }
+    } catch { /* no cancellation marker */ }
+  }
+  await writeJsonAtomic(paths.control, { desired_state: desiredState, updated_at: new Date().toISOString() })
+  return { desired_state: desiredState }
+}
+
+async function readBatchControl(paths) {
+  try {
+    await access(paths.cancelled)
+    return { desired_state: "cancelled" }
+  } catch { /* no cancellation marker */ }
+  try { return JSON.parse(await readFile(paths.control, "utf8")) } catch { return { desired_state: "running" } }
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+function markBatchCancelled(manifest) {
+  for (const task of manifest.tasks) if (["pending", "running"].includes(task.status)) task.status = "cancelled"
+  manifest.state = "cancelled"
+  manifest.worker_pid = null
+  manifest.pause_reason = null
+  manifest.pause_error = null
+}
+
+async function batchWorkerPid(manifest, paths) {
+  if (processIsAlive(manifest.worker_pid)) return manifest.worker_pid
+  try {
+    const lockPid = Number(String(await readFile(paths.lock, "utf8")).trim())
+    return processIsAlive(lockPid) ? lockPid : null
+  } catch {
+    return null
+  }
+}
+
+async function imageBatchPause(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  if (IMAGE_BATCH_FINAL_STATES.has(manifest.state)) return success("image.batch-pause", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+  const activeWorkerPid = await batchWorkerPid(manifest, paths)
+  const control = await writeBatchControl(paths, "paused")
+  if (control.desired_state === "cancelled" && !activeWorkerPid) {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+    return success("image.batch-pause", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
+  }
+  if (!activeWorkerPid) {
+    for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+    manifest.state = "paused"
+    manifest.worker_pid = null
+    await persistBatch(manifest, paths)
+  }
+  const state = activeWorkerPid ? "pausing" : "paused"
+  return success("image.batch-pause", manifest.batch_id, state, { data: { ...publicBatchData(manifest, paths), message: "已停止补入新任务；正在生成的图片会正常收口。" } })
+}
+
+async function imageBatchCancel(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  if (IMAGE_BATCH_FINAL_STATES.has(manifest.state)) return success("image.batch-cancel", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+  const activeWorkerPid = await batchWorkerPid(manifest, paths)
+  await writeBatchControl(paths, "cancelled")
+  if (!activeWorkerPid) {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+  }
+  return success("image.batch-cancel", manifest.batch_id, manifest.state === "cancelled" ? "cancelled" : "cancelling", { data: publicBatchData(manifest, paths) })
+}
+
+async function imageBatchRetry(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  if (await batchWorkerPid(manifest, paths)) throw new SkillError("TASK_RUNNING", "批量任务仍在运行，请先暂停后再重试失败项。")
+  if ((await readBatchControl(paths)).desired_state === "cancelled") {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+    return success("image.batch-retry", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
+  }
+  const selected = Array.isArray(input.task_ids) && input.task_ids.length ? new Set(input.task_ids.map(String)) : null
+  const retryTasks = manifest.tasks.filter((task) => task.status === "failed" && (selected ? selected.has(task.id) : task.error?.retryable === true))
+  if (!retryTasks.length) {
+    const hint = selected
+      ? "没有符合条件的失败任务可以重试。"
+      : "没有可自动重试的失败任务；如需重做不可重试项，请明确提供 task_ids。"
+    throw new SkillError("INVALID_INPUT", hint)
+  }
+  const estimatedRetryCredits = retryTasks.reduce((total, task, index) => total + ensureBatchModelAndRatio(task, manifest.shared, index), 0)
+  if (input.approve_cost !== true) {
+    return success("image.batch-retry", manifest.batch_id, "awaiting_retry_confirmation", {
+      data: {
+        ...publicBatchData(manifest, paths),
+        retry_count: retryTasks.length,
+        estimated_retry_credits: estimatedRetryCredits,
+        confirmation_required: true,
+        confirmation_hint: `重试 ${retryTasks.length} 张预计额外消耗 ${estimatedRetryCredits} 点，确认后重新排队。`,
+        next_action: "image.batch-retry",
+      },
+    })
+  }
+  let count = 0
+  for (const task of retryTasks) {
+    task.previous_request_ids.push(task.request_id)
+    task.request_id = requestId({})
+    task.status = "pending"
+    task.error = null
+    task.result = null
+    task.started_at = null
+    task.finished_at = null
+    count += 1
+  }
+  manifest.state = "paused"
+  manifest.pause_reason = null
+  manifest.pause_error = null
+  manifest.retry_approved_at = new Date().toISOString()
+  manifest.retry_estimated_credits = estimatedRetryCredits
+  await persistBatch(manifest, paths)
+  const control = await writeBatchControl(paths, "paused")
+  if (control.desired_state === "cancelled") {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+    return success("image.batch-retry", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
+  }
+  return success("image.batch-retry", manifest.batch_id, "paused", { data: { ...publicBatchData(manifest, paths), retry_count: count, estimated_retry_credits: estimatedRetryCredits, next_action: "image.batch-resume" } })
+}
+
+function batchPauseError(error) {
+  const normalized = error instanceof SkillError ? error : new SkillError("TEMPORARY_UNAVAILABLE", "批量任务准备失败，请稍后重试。", { retryable: true })
+  return {
+    normalized,
+    data: {
+      error_type: normalized.errorType,
+      retryable: normalized.retryable,
+      user_hint: normalized.userHint,
+      code: normalized.code || null,
+    },
+  }
+}
+
+function batchPausedState(errorType) {
+  if (errorType === "RATE_LIMITED") return "paused_rate_limit"
+  if (errorType === "CREDITS_INSUFFICIENT") return "paused_credits"
+  if (["CREDENTIALS_MISSING", "AUTH_ERROR", "PERMISSION_DENIED"].includes(errorType)) return "paused_account"
+  return "paused"
+}
+
+async function prepareBatchSharedReferences(manifest, paths, refreshIndex = manifest.shared_refresh_index || 0) {
+  const sourceField = batchReferenceField(manifest.shared)
+  if (!sourceField || manifest.shared_prepared) return
+  const prepared = await prepareReferences({
+    ...manifest.shared,
+    request_id: `${manifest.batch_id}_shared`,
+  }, refreshIndex)
+  manifest.shared_prepared = prepared
+  manifest.shared_refresh_index = refreshIndex
+  await persistBatch(manifest, paths)
+}
+
+const batchSharedRefreshes = new WeakMap()
+
+async function refreshBatchSharedReferences(manifest, paths) {
+  const existing = batchSharedRefreshes.get(manifest)
+  if (existing) return existing
+  const refresh = (async () => {
+    const nextRefreshIndex = Number(manifest.shared_refresh_index || 0) + 1
+    manifest.shared_prepared = null
+    await prepareBatchSharedReferences(manifest, paths, nextRefreshIndex)
+  })()
+  batchSharedRefreshes.set(manifest, refresh)
+  try {
+    return await refresh
+  } finally {
+    batchSharedRefreshes.delete(manifest)
+  }
+}
+
+function taskUsesSharedReferences(task, manifest) {
+  return !batchReferenceField(task.input) && Boolean(batchReferenceField(manifest.shared))
+}
+
+function executableBatchTaskInput(task, manifest) {
+  const merged = { ...manifest.shared, ...task.input, request_id: task.request_id }
+  if (taskUsesSharedReferences(task, manifest) && manifest.shared_prepared) {
+    for (const field of ["image", "reference_images", "reference_image_urls", "reference_image_keys"]) delete merged[field]
+    Object.assign(merged, manifest.shared_prepared)
+  }
+  merged.download_artifacts = false
+  return merged
+}
+
+async function executeBatchTask(task, manifest, paths, persist) {
+  task.status = "running"
+  task.started_at = new Date().toISOString()
+  task.attempts += 1
+  task.error = null
+  await persist()
+  try {
+    let result
+    const sharedRefreshIndex = Number(manifest.shared_refresh_index || 0)
+    try {
+      result = await generateImage(task.action, executableBatchTaskInput(task, manifest))
+    } catch (error) {
+      if (Number(error?.code) === 2064 && taskUsesSharedReferences(task, manifest)) {
+        if (Number(manifest.shared_refresh_index || 0) === sharedRefreshIndex) {
+          try {
+            await refreshBatchSharedReferences(manifest, paths)
+          } catch (refreshError) {
+            if (refreshError && typeof refreshError === "object") refreshError.batchGlobal = true
+            throw refreshError
+          }
+        }
+        result = await generateImage(task.action, executableBatchTaskInput(task, manifest))
+      } else {
+        throw error
+      }
+    }
+    const downloaded = await materializeArtifacts(result, {
+      enabled: manifest.download_artifacts,
+      outputDirectory: paths.results,
+      filenamePrefix: task.id,
+      maximumBytes: Number(process.env.FENGNIAO_MAX_DOWNLOAD_BYTES || DEFAULT_MAX_DOWNLOAD_BYTES),
+    })
+    task.status = "completed"
+    task.result = { artifacts: downloaded.artifacts, usage: downloaded.usage, data: downloaded.data, download: downloaded.download, download_warning: downloaded.download_warning }
+    task.finished_at = new Date().toISOString()
+    await persist()
+    return
+  } catch (error) {
+    const normalized = error instanceof SkillError ? error : new SkillError("TEMPORARY_UNAVAILABLE", "图片生成失败，请稍后重试。", { retryable: true })
+    if (IMAGE_BATCH_GLOBAL_PAUSE_ERRORS.has(normalized.errorType) || normalized.batchGlobal === true) {
+      task.status = "pending"
+      task.error = { error_type: normalized.errorType, retryable: normalized.retryable, user_hint: normalized.userHint, code: normalized.code || null }
+      manifest.pause_reason = normalized.errorType
+      manifest.pause_error = task.error
+      await writeBatchControl(paths, "paused")
+    } else {
+      task.status = "failed"
+      task.error = { error_type: normalized.errorType, retryable: normalized.retryable, user_hint: normalized.userHint, code: normalized.code || null }
+      task.finished_at = new Date().toISOString()
+    }
+    await persist()
+  }
+}
+
+async function imageBatchWorker(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  let lock
+  try {
+    lock = await open(paths.lock, "wx", 0o600)
+    await lock.writeFile(`${process.pid}\n`)
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      let existingPid = 0
+      try { existingPid = Number(String(await readFile(paths.lock, "utf8")).trim()) } catch { /* invalid stale lock */ }
+      if (processIsAlive(existingPid)) return success("image.batch-worker", manifest.batch_id, "running", { data: publicBatchData(manifest, paths) })
+      try { await unlink(paths.lock) } catch { /* noop */ }
+      lock = await open(paths.lock, "wx", 0o600)
+      await lock.writeFile(`${process.pid}\n`)
+    } else {
+      throw error
+    }
+  }
+  let writeChain = Promise.resolve()
+  const persist = () => {
+    const snapshot = structuredClone(manifest)
+    writeChain = writeChain.then(() => persistBatch(snapshot, paths))
+    return writeChain
+  }
+  try {
+    const initialControl = await readBatchControl(paths)
+    if (initialControl.desired_state !== "running") {
+      if (initialControl.desired_state === "cancelled") markBatchCancelled(manifest)
+      else {
+        for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+        manifest.state = "paused"
+        manifest.worker_pid = null
+      }
+      await persistBatch(manifest, paths)
+      return success("image.batch-worker", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+    }
+    for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+    manifest.worker_pid = process.pid
+    manifest.state = "preparing"
+    await persist()
+    await prepareBatchSharedReferences(manifest, paths)
+    const previewMode = !manifest.preview_approved && manifest.preview_count > 0
+    const candidateIndices = manifest.tasks
+      .map((task, index) => ({ task, index }))
+      .filter(({ task, index }) => task.status === "pending" && (!previewMode || index < manifest.preview_count))
+      .map(({ index }) => index)
+    manifest.state = previewMode ? "previewing" : "running"
+    await persist()
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(manifest.concurrency, candidateIndices.length) }, async () => {
+      while (cursor < candidateIndices.length) {
+        const control = await readBatchControl(paths)
+        if (control.desired_state !== "running" || manifest.pause_reason) return
+        const index = candidateIndices[cursor]
+        cursor += 1
+        await executeBatchTask(manifest.tasks[index], manifest, paths, persist)
+      }
+    })
+    await Promise.all(workers)
+    await writeChain
+    const control = await readBatchControl(paths)
+    if (control.desired_state === "cancelled") {
+      for (const task of manifest.tasks) if (task.status === "pending") task.status = "cancelled"
+      manifest.state = "cancelled"
+    } else if (manifest.pause_reason) {
+      manifest.state = batchPausedState(manifest.pause_reason)
+    } else if (control.desired_state === "paused") {
+      manifest.state = "paused"
+    } else if (previewMode) {
+      const summary = batchSummary(manifest)
+      if (summary.completed === 0) {
+        manifest.state = "preview_failed"
+        manifest.pause_reason = "PREVIEW_FAILED"
+        manifest.pause_error = {
+          error_type: "PREVIEW_FAILED",
+          retryable: summary.failed > 0 && manifest.tasks.some((task, index) => index < manifest.preview_count && task.error?.retryable === true),
+          user_hint: "样图没有成功生成，请先重试失败项或调整任务后重新创建批次。",
+          code: null,
+        }
+      } else {
+        manifest.state = "awaiting_preview_confirmation"
+      }
+      await writeBatchControl(paths, "paused")
+    } else {
+      const summary = batchSummary(manifest)
+      manifest.state = summary.failed ? "partial_failed" : "completed"
+      await writeBatchControl(paths, "completed")
+    }
+    const latestControl = await readBatchControl(paths)
+    if (latestControl.desired_state === "cancelled") markBatchCancelled(manifest)
+    else manifest.worker_pid = null
+    await persist()
+    await writeChain
+    return success("image.batch-worker", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+  } catch (error) {
+    const control = await readBatchControl(paths)
+    if (control.desired_state === "cancelled") {
+      markBatchCancelled(manifest)
+    } else {
+      const { normalized, data } = batchPauseError(error)
+      for (const task of manifest.tasks) if (task.status === "running") task.status = "pending"
+      manifest.state = IMAGE_BATCH_GLOBAL_PAUSE_ERRORS.has(normalized.errorType) ? batchPausedState(normalized.errorType) : "paused_setup_error"
+      manifest.pause_reason = normalized.errorType
+      manifest.pause_error = data
+      await writeBatchControl(paths, "paused")
+    }
+    manifest.worker_pid = null
+    await persistBatch(manifest, paths)
+    return success("image.batch-worker", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+  } finally {
+    try { await lock?.close() } catch { /* noop */ }
+    try { await unlink(paths.lock) } catch { /* noop */ }
+  }
+}
+
+async function imageBatchResume(input) {
+  const { manifest, paths } = await readBatchManifest(requireString(input, "batch_dir", "batch_dir"))
+  if (await batchWorkerPid(manifest, paths)) throw new SkillError("TASK_RUNNING", "批量任务已经在运行。")
+  if ((await readBatchControl(paths)).desired_state === "cancelled") {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+    return success("image.batch-resume", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
+  }
+  if (["completed", "cancelled"].includes(manifest.state)) return success("image.batch-resume", manifest.batch_id, manifest.state, { data: publicBatchData(manifest, paths) })
+  if (manifest.state === "preview_failed") {
+    throw new SkillError("INVALID_INPUT", "样图没有成功生成，请先重试失败项或调整任务后重新创建批次。")
+  }
+  if (manifest.state === "partial_failed" && !manifest.tasks.some((task) => task.status === "pending")) {
+    throw new SkillError("INVALID_INPUT", "当前批次只剩失败项，请先确认并重试失败图片。")
+  }
+  if (!manifest.cost_approved) {
+    if (input.approve_cost !== true) throw new SkillError("INVALID_INPUT", `开始前需要确认预计消耗 ${manifest.estimated_credits} 点。`)
+    manifest.cost_approved = true
+    manifest.cost_approved_at = new Date().toISOString()
+    if (input.skip_preview === true) manifest.preview_approved = true
+  }
+  if (manifest.state === "awaiting_preview_confirmation" && !manifest.preview_approved) {
+    if (input.approve_preview !== true) throw new SkillError("INVALID_INPUT", "请先确认样图，再继续剩余批量任务。")
+    manifest.preview_approved = true
+    manifest.preview_approved_at = new Date().toISOString()
+  }
+  manifest.state = "queued"
+  manifest.pause_reason = null
+  manifest.pause_error = null
+  await persistBatch(manifest, paths)
+  const control = await writeBatchControl(paths, "running")
+  if (control.desired_state === "cancelled") {
+    markBatchCancelled(manifest)
+    await persistBatch(manifest, paths)
+    return success("image.batch-resume", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
+  }
+  if (input.background === false) return imageBatchWorker({ batch_dir: paths.directory })
+  const pid = launchBatchWorker(paths.directory)
+  return success("image.batch-resume", manifest.batch_id, "starting", { data: { ...publicBatchData(manifest, paths), worker_pid: pid, message: "批量任务已在后台启动，可使用 batch-status 查看进度。" } })
+}
+
 async function cutout(input, refreshIndex = 0) {
   const currentRequestId = requestId(input)
   const subjectTypes = { person: "body", product: "commodity", clothing: "cloth", general: "common" }
@@ -1375,6 +2151,14 @@ async function run(group, action, input) {
   if (group === "account" && action === "balance") return accountBalance(input)
   if (group === "skill" && action === "check-update") return skillCheckUpdate(input)
   if (group === "image" && new Set(["generate", "transform", "expand", "enhance"]).has(action)) return generateImage(action, input)
+  if (group === "image" && action === "batch-submit") return imageBatchSubmit(input)
+  if (group === "image" && action === "batch-list") return imageBatchList(input)
+  if (group === "image" && action === "batch-status") return imageBatchStatus(input)
+  if (group === "image" && action === "batch-pause") return imageBatchPause(input)
+  if (group === "image" && action === "batch-resume") return imageBatchResume(input)
+  if (group === "image" && action === "batch-retry") return imageBatchRetry(input)
+  if (group === "image" && action === "batch-cancel") return imageBatchCancel(input)
+  if (group === "image" && action === "batch-worker") return imageBatchWorker(input)
   if (group === "image" && action === "cutout") return cutout(input)
   if (group === "image" && action === "ocr-submit") return ocrSubmit(input)
   if (group === "image" && action === "ocr-status") return ocrStatus(input)

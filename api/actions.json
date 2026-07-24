@@ -150,9 +150,7 @@
       "required": ["image|reference_images|reference_image_urls"],
       "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles"],
       "defaults": {
-        "resolution": "2k",
-        "aspect_ratio": "original",
-        "model_alias": "tpro-1k"
+        "aspect_ratio": "original"
       },
       "input_modes": ["https-url", "data-url", "local-path"],
       "response_mode": "sync",
@@ -160,6 +158,115 @@
       "ask_if_missing": {
         "image|reference_images|reference_image_urls": "请提供要增强的本地图片或 HTTPS 图片；多张图片请按主图、补充角度或细节的顺序提供。"
       },
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-submit": {
+      "label": "创建批量生图任务",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "为 11 到 1000 张生图、改图、白底图、扩图或高清增强建立可恢复任务清单，先返回预计点数，不立即生成。",
+      "triggers": ["批量生图", "批量生成图片", "批量改图", "批量参考图改图", "批量白底图", "批量电商主图", "生成很多张", "几百张生图"],
+      "required": ["tasks"],
+      "optional": ["action", "shared", "concurrency", "preview_count", "output_dir", "download_artifacts"],
+      "defaults": {
+        "concurrency": 10
+      },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-submit",
+      "ask_if_missing": {
+        "tasks": "请先整理每张图片的用途、提示词、比例和参考图；我会计算总操作数与预计点数，确认后再开始。"
+      },
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-list": {
+      "label": "查看最近生图批次",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "从用户级批次索引列出最近的批量生图任务，使新对话也能找回进度和结果。",
+      "triggers": ["最近的生图批次", "查看上次生图任务", "找回批量生图", "继续上次批量生图"],
+      "required": [],
+      "optional": ["limit", "include_completed"],
+      "defaults": { "limit": 20, "include_completed": true },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-list",
+      "ask_if_missing": {},
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-status": {
+      "label": "查询批量生图进度",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "查询批次完成数、处理中、等待、失败和最近结果；默认不返回完整大清单。",
+      "triggers": ["批量生图进度", "生图生成到哪了", "查看生图批次", "生图批次还有多少张"],
+      "required": ["batch_dir"],
+      "optional": ["include_tasks"],
+      "defaults": { "include_tasks": false },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-status",
+      "ask_if_missing": {},
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-resume": {
+      "label": "确认或恢复批量生图",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "用户确认预计点数、确认样图、充值到账或中断恢复后继续同一批次。",
+      "triggers": ["确认开始批量", "样图可以继续", "继续批次", "恢复批量任务", "充值好了继续"],
+      "required": ["batch_dir"],
+      "optional": ["approve_cost", "approve_preview", "skip_preview", "background"],
+      "defaults": { "background": true },
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-resume",
+      "ask_if_missing": {},
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-pause": {
+      "label": "暂停批量生图",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "停止补入新任务，允许正在生成的图片正常完成并保存。",
+      "triggers": ["暂停批量", "先停一下", "停止继续生成"],
+      "required": ["batch_dir"],
+      "optional": [],
+      "defaults": {},
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-pause",
+      "ask_if_missing": {},
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-retry": {
+      "label": "重试批量失败项",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "默认选择可重试的失败任务，先计算额外点数并确认，再以新 request ID 重新排队；不可重试项必须明确指定。",
+      "triggers": ["重试失败图片", "重做失败项", "批量失败重试"],
+      "required": ["batch_dir"],
+      "optional": ["task_ids", "approve_cost"],
+      "defaults": {},
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-retry",
+      "ask_if_missing": {},
+      "reference": "references/image-generation.md"
+    },
+    "image.batch-cancel": {
+      "label": "取消批量生图",
+      "skill": "fengniao-image-generate",
+      "status": "active",
+      "description": "取消尚未开始的任务，正在生成的图片仍会正常收口。",
+      "triggers": ["取消批量", "取消剩余图片", "不继续生成了"],
+      "required": ["batch_dir"],
+      "optional": [],
+      "defaults": {},
+      "input_modes": ["json"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image batch-cancel",
+      "ask_if_missing": {},
       "reference": "references/image-generation.md"
     },
     "image.cutout": {

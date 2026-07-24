@@ -42,3 +42,23 @@
 - 仅生成并保存成功后扣费；参数、余额、下载、安全审核和保存失败不消费点数。
 - `result.url` 是可能过期的签名 URL。需要长期使用时及时下载保存；重新取签名必须以原 ID 和完全相同参数重放。
 - 以响应体 `code` 判断业务结果；网关限流可能同时返回 HTTP 429。
+
+## 大批量与中断恢复
+
+一次超过 10 张时使用 `image batch-submit`，不要由 Agent 同时拼接大量单图命令。输入由可复用的 `shared` 和最多 1000 个 `tasks` 组成；每个 task 可设置 `id`、`action` 以及该任务自己的 Prompt、比例、模型或参考图。`shared` 适合放整批相同的参考图、参考职责、模型和通用参数。
+
+`batch-submit` 创建 `manifest.json` 后返回 `awaiting_start_confirmation`、预计点数和绝对 `batch_dir`，不会立即请求付费接口。确认后使用：
+
+```bash
+node scripts/fengniaoai.mjs image batch-resume --input-json '{"batch_dir":"/absolute/path/to/batch","approve_cost":true}'
+```
+
+超过 50 张默认只执行前三张样图；确认样图后继续：
+
+```bash
+node scripts/fengniaoai.mjs image batch-resume --input-json '{"batch_dir":"/absolute/path/to/batch","approve_preview":true}'
+```
+
+状态、暂停、取消和失败项重试分别使用 `batch-status`、`batch-pause`、`batch-cancel`、`batch-retry`。后台不可用的平台可在 `batch-resume` 中传 `background=false` 前台运行；状态仍逐张保存，进程中断后可再次 resume。完整并发与限流策略见 `references/actions.md`。
+
+新对话不知道 `batch_dir` 时先调用 `image batch-list`，默认返回最近 20 个批次的状态、汇总和结果目录，再选择目标批次查询或继续；不要让用户去文件系统手工寻找。若三张样图全部失败，批次进入 `preview_failed`，不能用 `approve_preview` 强行继续，应先处理失败原因或重建批次。

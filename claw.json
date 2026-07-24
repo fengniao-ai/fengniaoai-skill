@@ -1,6 +1,6 @@
 {
   "name": "fengniaoai-skill",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "fengniaoai",
   "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译。",
   "license": "Apache-2.0",
@@ -23,6 +23,7 @@
     "ocr",
     "ecommerce",
     "product-images",
+    "batch-image-generation",
     "生图",
     "改图",
     "扩图",
@@ -110,7 +111,7 @@
   "skills": {
     "fengniao-image-generate": {
       "entry": "skills/fengniao-image-generate/SKILL.md",
-      "description": "文生图、参考图改图、白底图、扩图和 2K/4K 生成式高清增强。",
+      "description": "文生图、参考图改图、白底图、扩图、2K/4K 生成式高清增强和可恢复的大批量任务。",
       "status": "active"
     },
     "fengniao-image-tools": {
