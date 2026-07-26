@@ -1,6 +1,6 @@
 interface:
   display_name: "蜂鸟AI翻译与生图"
-  short_description: "AI 翻译和 AI 生图：生成、修图、电商、社媒、营销设计"
-  default_prompt: "使用 $fengniaoai-skill 开启蜂鸟AI，友好地问我想翻译图片或视频，还是进行AI生图、修图、扩图、抠图、高清放大或制作电商套图，并根据我的选择引导下一步。"
+  short_description: "AI 翻译和 AI 生图：生成、修图、电商、社媒、营销设计、商品采集、识图分析"
+  default_prompt: "使用 $fengniaoai-skill 启动蜂鸟AI。请用中文介绍可以做什么，并引导我上传图片、视频、商品链接或直接描述需求。"
 policy:
   allow_implicit_invocation: true

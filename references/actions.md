@@ -14,16 +14,18 @@ CLI 优先从环境变量读取凭证，也支持由 `account configure` 保存�
 | --- | --- | --- | --- |
 | `account` | `configure` | Key 页面复制的两行配置，通过 `--input-stdin` 输入 | 安全保存 Project ID 与 Api key，不回显凭证。 |
 | `account` | `balance` | 无 | 查询剩余油包/点数；`channel` 默认 `fengn`，可选 `uid`。 |
+| `product` | `scrape` | `url` | 采集 1688、淘宝/天猫或 Amazon 商品资料，保存 JSON 并分组下载图片。 |
+| `image` | `analyze` | 本地 `image` | 上传并分析商品图、详情长图或界面截图，保存分析 Markdown。 |
 | `image` | `generate` | `prompt` | 文生图。 |
 | `image` | `transform` | `image`、`reference_images` 或 `reference_image_urls`，以及 `prompt` | 单图或多参考图生成、改图。 |
 | `image` | `expand` | 参考图、`aspect_ratio` | 通过生图接口生成式扩展画布。 |
 | `image` | `enhance` | 参考图 | 普通生成式高清增强；用户明确传 `resolution=2k/4k` 时使用对应高清模型。 |
-| `image` | `batch-submit` | `tasks` | 创建可恢复的大批量生图任务并计算预计点数，不立即执行。 |
-| `image` | `batch-list` | 无 | 列出当前用户最近的批次；新对话先用它找回 `batch_dir`。 |
+| `image` | `batch-submit` | `tasks` | 创建可恢复的共享参考图套图或大批量生图任务并计算预计点数，不立即执行。 |
+| `image` | `batch-list` | 无 | 列出当前用户最近的批次；索引不可用时从默认结果目录发现，也可传 `output_dir` 指定查找范围。 |
 | `image` | `batch-status` | `batch_dir` | 查询批次汇总、最近结果；按需返回完整任务清单。 |
 | `image` | `batch-resume` | `batch_dir` | 确认点数或样图、从暂停/限流/中断位置继续。 |
 | `image` | `batch-pause` | `batch_dir` | 停止补入新任务，让在途任务正常收口。 |
-| `image` | `batch-retry` | `batch_dir` | 先计算失败项额外点数，确认后以新 request ID 重新排队。 |
+| `image` | `batch-retry` | `batch_dir` | 默认重试可重试失败项；指定 `task_ids` 可重做失败或已完成图片。先报价，确认后以新 request ID 排队。 |
 | `image` | `batch-cancel` | `batch_dir` | 取消未开始任务，保留已完成结果。 |
 | `image` | `cutout` | `image` | 抠图去背景。 |
 | `image` | `ocr-submit` | `image` | 创建 OCR 任务。 |
@@ -64,14 +66,18 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
 | 视频翻译创建 | 2 QPS | 1–10 个视频优先用一次 `video_keys`/`video_urls` 批量创建，不逐个并发创建。 |
 | 视频翻译查询 | 20 QPS | 优先使用 `batch_id`，或一次传最多 20 个 `task_ids`；每 5–10 秒查询一次。 |
 | OCR | 暂无独立路由限流项 | 保守使用最多 2 个并发，单任务按现有轮询间隔查询。 |
+| 商品采集 | 每用户 10 QPS | 单次同步调用；批量最多 3 个在途，新提交不超过 10 次/秒。 |
+| 识图分析 | 每用户 10 QPS | 单次同步调用；批量最多 3 个在途，新提交不超过 10 次/秒。 |
 
 多个 Agent 进程不共享本地并发队列，服务端 `429/30001` 与 CLI 退避重试是最终保护。图片翻译批量调度应同时满足“最多 2 个在途请求”和“每秒不超过 5 次新请求”；如果多个 Agent 共用同一账号，仍以服务端 5 QPS 为总上限。批量任务执行前应说明将产生的操作数量并确认点数；批量中的每个付费图片任务使用独立业务 `request_id`，同一任务的网络重试才复用原值。
 
-电商套图的滑动队列先启动最多 10 张；任一任务成功或不可重试地失败后释放工作槽，并按原任务顺序补入下一张。遇到服务端 `429/30001` 时，该任务仍占用原槽位并复用原 `request_id`：优先等待服务端 `Retry-After`，否则由 CLI 默认约 1 秒、2 秒退避，默认总共尝试 3 次。重试后仍被限流时，暂停新增提交并返回 `RATE_LIMITED`，保留未开始任务和当前任务参数；不要无限重试，也不要换新 `request_id`。稍后恢复时只继续未完成任务，已经成功的图片不得重复提交。
+电商套图的滑动队列先启动最多 10 张；任一任务成功或不可重试地失败后释放工作槽，并按原任务顺序补入下一张。遇到服务端 `429/30001` 时，该任务仍占用原槽位并复用原 `request_id`：优先等待服务端 `Retry-After`，否则由 CLI 默认约 1 秒、2 秒退避，默认总共尝试 3 次。重试后仍被限流时，暂停新增提交并返回 `RATE_LIMITED`，保留未开始任务和当前任务参数；不要无限重试，也不要换新 `request_id`。普通恢复只继续未完成任务，不重复提交成功图片；只有用户明确要求重做并确认额外点数后，才通过 `batch-retry task_ids` 重新生成指定成功项。
 
-大批量执行器将任务逐张写入 `manifest.json`，并单独维护 `control.json` 和 `progress.json`。后台 worker 使用独占锁避免同一批次重复运行；取消使用不可逆标记，任何并发错误、暂停或恢复都不能覆盖用户的取消指令。异常退出遗留的 `running` 项在恢复时回到 `pending`，仍复用原 `request_id` 取得幂等结果。凭证、权限、点数、共享素材准备或限流错误会暂停整个队列并保存原因，不逐张制造相同失败。一个批次最多 1000 张；超过 50 张默认设置 3 张样图闸门，三张均失败时禁止确认放行整批。共享参考图在同一批次只上传一次，临时素材失效时从原始本地路径重新上传。用户级最近批次索引只保存批次 ID、绝对目录和创建时间，便于新对话通过 `batch-list` 找回任务。
+批量执行器把恢复状态写入业务目录的 `.fengniao/manifest.json`、`control.json` 和 `progress.json`，结果图片直接位于业务目录。worker 使用独占锁避免同一批次重复运行；取消使用不可逆标记，任何并发错误、暂停或恢复都不能覆盖用户的取消指令。异常退出遗留的 `running` 项在恢复时回到 `pending`，仍复用原 `request_id` 取得幂等结果。凭证、权限、点数、共享素材准备或限流错误会暂停整个队列并保存原因，不逐张制造相同失败。一个批次最多 1000 张；超过 50 张默认设置 3 张样图闸门，三张均失败时禁止确认放行整批。共享参考图在同一批次只上传一次，临时素材失效时从原始本地路径重新上传。用户级索引不可读写时，`batch-list` 从结果目录发现新布局批次；旧布局继续兼容读取。
 
-失败重试默认只选择 `retryable=true` 的任务。第一次调用 `batch-retry` 只返回重试数量和预计额外点数；用户明确确认后再传 `approve_cost=true` 重新排队。不可重试失败必须显式提供 `task_ids`，防止参数、安全或素材错误被整批重复扣点。
+`batch-resume` 默认前台执行，适配会回收后台子进程的 Agent。只有平台明确支持长驻进程时才传 `background=true`。需要把用户级批次索引放到平台指定可写目录时设置 `FENGNIAO_STATE_DIR`；该目录只保存索引，不保存凭证。
+
+不传 `task_ids` 时，失败重试只选择 `retryable=true` 的任务。显式提供 `task_ids` 时，可以重做指定的失败项或已完成项，适合单独修正视觉不合格图片。第一次调用 `batch-retry` 只返回数量和预计额外点数；用户明确确认后再传 `approve_cost=true` 重新排队。每次重做使用新 `request_id`，结果依次保存为 `-v2`、`-v3`，旧图始终保留。
 
 ## 有效期、请求超时与轮询
 
@@ -81,10 +87,14 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
 | 临时素材 key | 24 小时有效 | 业务接口返回 `2063/2064` 时自动重新上传，不继续使用失效 key。 |
 | 生图、改图、扩图、高清增强 | 请求超时至少 120 秒；2K/4K 建议至少 180 秒 | API 请求默认 190 秒。 |
 | 图片翻译 | 同步接口，请求超时至少 120 秒 | API 请求默认 190 秒。 |
+| 商品采集 | 同步接口，请求超时至少 45 秒 | API 请求默认 190 秒。 |
+| 识图分析 | 同步接口，请求超时至少 90 秒 | API 请求默认 190 秒。 |
 | 视频翻译 | 异步任务，建议 5–10 秒查询一次，最长等待约 30 分钟 | 默认每 5 秒查询，等待 30 分钟后返回 pending 和任务 ID，不判定失败。 |
 | OCR | 异步任务 | 默认每 1.5 秒查询，最多等待 90 秒；超时后保留任务 ID 供继续查询。 |
 
 `FENGNIAO_REQUEST_TIMEOUT_MS` 只在部署环境确有需要时调整，不应低于同步图片接口要求；`FENGNIAO_UPLOAD_TIMEOUT_MS` 即使配置更大，也会被限制在上传地址有效期以内。
+
+商品采集和识图分析没有跨请求幂等。CLI 对这两个业务请求固定只尝试一次，不因网络断开、超时或服务端 5xx 自动重复付费调用；状态不确定时向用户说明风险，由用户确认后使用新的任务决定是否重试。素材上传步骤仍可按上传协议安全重试。
 
 接口专项参数不要从本表推断：生图读取 `image-generation.md`，图片翻译读取 `image-translation.md`，视频翻译读取 `video-translation.md`。
 
@@ -107,19 +117,21 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
 
 ## 自动下载产物
 
-图片、视频、音频和字幕等最终产物默认自动下载。每个成功下载的 `artifact` 会保留远程 `url`，并增加绝对路径 `local_path`。Agent 应优先把本地文件交付给用户；本地下载失败时使用远程 URL。
+图片、视频、音频、字幕、商品资料和识图文本等最终产物默认自动下载。每个成功下载或保存的 `artifact` 会增加绝对路径 `local_path`；远程附件同时保留 `url`。Agent 应优先把本地文件交付给用户；本地下载失败时使用远程 URL。
 
 可在任意会产生附件的 action 输入中使用以下控制字段；它们只控制本地交付，不会发送给蜂鸟AI 视频接口：
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `download_artifacts` | `true` | 传 `false` 时只返回远程 URL。 |
-| `output_dir` | 当前工作区的 `output/fengniaoai-skill/` | 指定本地输出目录；禁止指向 Skill 安装目录。 |
-| `filename_prefix` | 产物角色或类型 | 指定安全化后的文件名前缀；同名文件自动编号。 |
+| `output_dir` | 单任务进入 `output/fengniaoai-skill/<时间>-<action>-<短ID>/` | 显式指定时直接使用该目录；批量任务将其作为业务目录，禁止指向 Skill 安装目录。 |
+| `filename_prefix` | 来源文件名与处理动作 | 显式指定安全化后的文件名前缀；同名文件自动编号。 |
+
+CLI 会为单次生图、改图、扩图、高清增强、抠图、图片翻译和视频翻译自动建立唯一任务目录，并用源文件名、动作、比例、分辨率、目标语言或视频任务 ID 组织文件名。Agent 只有在用户明确指定项目目录或业务命名时才需要传 `output_dir`、`filename_prefix`。商品采集自动按平台和商品 ID 建立子目录；识图文本进入 `analysis/`；批量结果直接保存为 `<batch_dir>/<id>.<实际格式>`，重做为 `<id>-v2`。完整命名规则见 `product-workflow.md`。
 
 对应环境变量为 `FENGNIAO_AUTO_DOWNLOAD`、`FENGNIAO_OUTPUT_DIR`。`FENGNIAO_MAX_DOWNLOAD_BYTES` 可调整单个文件上限，默认 1 GB；`FENGNIAO_DOWNLOAD_TIMEOUT_MS` 可调整单次下载超时，默认 10 分钟。输入字段优先于环境变量。
 
-如果命令从 Skill 安装目录内部运行，默认目录回退为 `~/Downloads/fengniaoai-skill/`。下载采用临时文件和流式写入，完成后再原子改名；根据文件内容、响应类型和 URL 判断扩展名，重复文件不会覆盖。
+如果命令从 Skill 安装目录内部运行，默认根目录回退为 `~/Downloads/fengniaoai-skill/`。下载采用临时文件和流式写入，完成后再原子改名；根据文件内容、响应类型和 URL 判断扩展名，重复文件不会覆盖。
 
 包含附件的成功响应会增加：
 
@@ -130,12 +142,12 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
       "type": "image",
       "role": "translated",
       "url": "https://...",
-      "local_path": "/workspace/output/fengniaoai-skill/translated.png"
+      "local_path": "/workspace/output/fengniaoai-skill/20260726-153012-image-translate-a1b2c3d4/product-translated-en.png"
     }
   ],
   "download": {
     "enabled": true,
-    "output_dir": "/workspace/output/fengniaoai-skill",
+    "output_dir": "/workspace/output/fengniaoai-skill/20260726-153012-image-translate-a1b2c3d4",
     "completed": 1,
     "failed": 0,
     "warnings": []

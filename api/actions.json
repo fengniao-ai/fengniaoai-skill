@@ -10,7 +10,7 @@
       },
       "output_dir": {
         "type": "string",
-        "default": "<cwd>/output/fengniaoai-skill"
+        "default": "<cwd>/output/fengniaoai-skill/<timestamp>-<action>-<short-id>"
       },
       "filename_prefix": {
         "type": "string"
@@ -80,6 +80,45 @@
       "ask_if_missing": {},
       "reference": "references/getting-started.md"
     },
+    "product.scrape": {
+      "label": "采集商品资料与图片",
+      "skill": "fengniao-product-insight",
+      "status": "active",
+      "description": "从 1688、淘宝/天猫或 Amazon 商品详情页采集结构化资料，并将完整 product.json 和主图、SKU 图、详情图分目录下载到本地；用户要求分析 URL 商品时，后续必须联合 product.json 与图片证据生成 analysis/product-analysis.md。",
+      "triggers": ["采集商品信息", "解析商品链接", "分析商品链接", "下载1688商品", "获取1688商品", "下载商品图片", "读取淘宝商品", "读取Amazon商品"],
+      "required": ["url"],
+      "optional": ["platform", "customer_id", "image_groups", "output_dir", "download_artifacts"],
+      "defaults": {
+        "image_groups": ["main", "sku", "detail"],
+        "download_artifacts": true
+      },
+      "input_modes": ["json", "https-url"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs product scrape",
+      "ask_if_missing": {
+        "url": "请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。"
+      },
+      "reference": "references/product-workflow.md"
+    },
+    "image.analyze": {
+      "label": "识图分析",
+      "skill": "fengniao-product-insight",
+      "status": "active",
+      "description": "分析商品图、详情长图或界面截图的可见内容，并将自然语言分析保存为本地 Markdown；分析 URL 商品或在套图流程中选择分析后规划时，完整读取 product.json，对全部去重主图逐张调用，并联合页面字段与图片证据生成 analysis/product-analysis.md。",
+      "triggers": ["分析图片", "识图分析", "分析商品图", "分析详情页", "分析截图", "看看图片里有什么", "提取商品视觉信息"],
+      "required": ["image"],
+      "optional": ["customer_id", "analysis_id", "output_dir", "download_artifacts"],
+      "defaults": {
+        "download_artifacts": true
+      },
+      "input_modes": ["local-path", "data-url", "asset-key"],
+      "response_mode": "sync",
+      "command": "node scripts/fengniaoai.mjs image analyze",
+      "ask_if_missing": {
+        "image": "请提供要分析的本地图片；如果是商品链接，我可以先采集并下载图片。"
+      },
+      "reference": "references/product-workflow.md"
+    },
     "image.generate": {
       "label": "从零生成图片",
       "skill": "fengniao-image-generate",
@@ -87,7 +126,7 @@
       "description": "根据文字描述从零生成海报、封面、商品场景图或创意视觉。",
       "triggers": ["生成图片", "生成一张图", "文生图", "做一张海报", "生成海报", "生成封面", "生成商品图", "商品场景图", "营销图"],
       "required": ["prompt"],
-      "optional": ["aspect_ratio", "model_alias", "customer_id"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "aspect_ratio": "1:1",
         "model_alias": "tpro-1k"
@@ -107,7 +146,7 @@
       "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
       "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品", "白底图", "白底主图", "做成白底", "纯白背景"],
       "required": ["image|reference_images|reference_image_urls", "prompt"],
-      "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "aspect_ratio": "original",
         "model_alias": "tpro-1k"
@@ -128,7 +167,7 @@
       "description": "自然补全画面外区域，将图片扩为横版、竖版、方图或指定比例。",
       "triggers": ["扩图", "图片扩图", "扩展图片", "扩成横版", "扩成竖版", "改成16:9", "补全背景", "比例转换"],
       "required": ["image|reference_images|reference_image_urls", "aspect_ratio"],
-      "optional": ["prompt", "model_alias", "customer_id", "reference_roles"],
+      "optional": ["prompt", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "model_alias": "tpro-1k"
       },
@@ -148,7 +187,7 @@
       "description": "通过生成式高清重绘得到 2K 或 4K 图片，不承诺像素级无损。",
       "triggers": ["变成2K", "变成4K", "2K放大", "4K放大", "图片高清", "高清放大", "高清增强", "高清重绘", "放大到4K", "提升分辨率"],
       "required": ["image|reference_images|reference_image_urls"],
-      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles"],
+      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "aspect_ratio": "original"
       },
@@ -164,7 +203,7 @@
       "label": "创建批量生图任务",
       "skill": "fengniao-image-generate",
       "status": "active",
-      "description": "为 11 到 1000 张生图、改图、白底图、扩图或高清增强建立可恢复任务清单，先返回预计点数，不立即生成。",
+      "description": "为共享参考图的多张套图或 11 到 1000 张普通生图任务建立可恢复清单，先返回预计点数，不立即生成。",
       "triggers": ["批量生图", "批量生成图片", "批量改图", "批量参考图改图", "批量白底图", "批量电商主图", "生成很多张", "几百张生图"],
       "required": ["tasks"],
       "optional": ["action", "shared", "concurrency", "preview_count", "output_dir", "download_artifacts"],
@@ -186,7 +225,7 @@
       "description": "从用户级批次索引列出最近的批量生图任务，使新对话也能找回进度和结果。",
       "triggers": ["最近的生图批次", "查看上次生图任务", "找回批量生图", "继续上次批量生图"],
       "required": [],
-      "optional": ["limit", "include_completed"],
+      "optional": ["limit", "include_completed", "output_dir"],
       "defaults": { "limit": 20, "include_completed": true },
       "input_modes": ["json"],
       "response_mode": "sync",
@@ -217,7 +256,7 @@
       "triggers": ["确认开始批量", "样图可以继续", "继续批次", "恢复批量任务", "充值好了继续"],
       "required": ["batch_dir"],
       "optional": ["approve_cost", "approve_preview", "skip_preview", "background"],
-      "defaults": { "background": true },
+      "defaults": { "background": false },
       "input_modes": ["json"],
       "response_mode": "sync",
       "command": "node scripts/fengniaoai.mjs image batch-resume",
@@ -240,11 +279,11 @@
       "reference": "references/image-generation.md"
     },
     "image.batch-retry": {
-      "label": "重试批量失败项",
+      "label": "重试或重做批量图片",
       "skill": "fengniao-image-generate",
       "status": "active",
-      "description": "默认选择可重试的失败任务，先计算额外点数并确认，再以新 request ID 重新排队；不可重试项必须明确指定。",
-      "triggers": ["重试失败图片", "重做失败项", "批量失败重试"],
+      "description": "默认选择可重试的失败任务；显式 task_ids 可重做失败或已完成图片。先计算额外点数并确认，再以新 request ID 排队，重做结果保存为 v2 且不覆盖旧图。",
+      "triggers": ["重试失败图片", "重做失败项", "重做这张图", "重新生成这张", "批量失败重试"],
       "required": ["batch_dir"],
       "optional": ["task_ids", "approve_cost"],
       "defaults": {},
@@ -276,7 +315,7 @@
       "description": "仅在用户明确要求抠图、去背景、移除背景或抠出主体时，识别主体并输出用户指定的透明底、白底或主体裁切结果。",
       "triggers": ["抠图", "图片抠图", "抠出商品", "抠出主体", "去背景", "移除背景"],
       "required": ["image"],
-      "optional": ["subject_type", "background", "customer_id"],
+      "optional": ["subject_type", "background", "customer_id", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "subject_type": "general",
         "background": "transparent"
@@ -347,7 +386,7 @@
       "description": "识别并翻译图片文字，生成尽量保留原版式的译文图片，同时保存历史记录并返回精修标识。",
       "triggers": ["图片翻译", "翻译图片", "翻译海报", "把图片翻成英文", "翻译商品图", "识别后翻译"],
       "required": ["image", "lang_from", "lang_to"],
-      "optional": ["engine", "commodity_protection", "glossary_enabled", "brand_protect", "filename"],
+      "optional": ["engine", "commodity_protection", "glossary_enabled", "brand_protect", "filename", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "commodity_protection": false
       },
@@ -388,7 +427,7 @@
       "description": "根据任务 ID、任务 ID 列表或批次 ID 查询视频翻译进度和附件。",
       "triggers": ["视频翻译进度", "查询视频翻译", "继续视频翻译任务"],
       "required": ["task_id|task_ids|batch_id"],
-      "optional": [],
+      "optional": ["output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {},
       "input_modes": ["json"],
       "response_mode": "async-query",
@@ -405,7 +444,7 @@
       "description": "创建一个视频翻译任务并持续查询，支持字幕翻译、擦字幕、AI 配音和原声克隆。",
       "triggers": ["视频翻译", "翻译视频", "翻译这个视频", "视频字幕翻译", "擦掉原字幕", "生成双语字幕", "视频AI配音", "克隆原声"],
       "required": ["video|video_url", "source_language", "target_language", "translation_type_list"],
-      "optional": ["subtitle", "tts", "timeout_seconds", "poll_interval_ms", "customer_id", "custom_data"],
+      "optional": ["subtitle", "tts", "timeout_seconds", "poll_interval_ms", "customer_id", "custom_data", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {},
       "input_modes": ["https-url", "local-path"],
       "response_mode": "poll",

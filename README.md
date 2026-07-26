@@ -1,6 +1,6 @@
 # fengniaoai-skill
 
-面向通用 AI Agent 的蜂鸟AI翻译与生图技能包。用自然语言完成图片、视频翻译，以及图片生成、编辑和电商设计；无需让用户理解模型或 API 参数。
+面向通用 AI Agent 的蜂鸟AI翻译与生图技能包。用自然语言完成图片、视频翻译，图片生成、编辑、电商设计，以及商品资料采集与识图分析；无需让用户理解模型或 API 参数。
 
 [蜂鸟AI官网](https://fengniaoai.com/) · [使用文档](https://github.com/fengniao-ai/fengniaoai-skill#readme) · [问题反馈](https://github.com/fengniao-ai/fengniaoai-skill/issues) · [获取 Project ID 与 Api key](https://fengniaoai.com/userCenter/key) · [Apache-2.0 License](./LICENSE.txt)
 
@@ -19,12 +19,19 @@
 - **图片生成**：文生图、最多 6 张有序参考图生图、比例与模型选择；可为每张参考图指定主体、角度、细节或风格职责。
 - **图片编辑**：改图、扩图、2K/4K 生成式高清增强、抠图、透明底、白底和文字坐标识别。
 - **电商套图**：围绕同一商品生成主图、场景图、卖点图和多尺寸渠道套图，并保持商品与视觉风格一致。
+- **商品资料与识图**：采集 1688、淘宝/天猫、Amazon 商品资料与图片，分析商品主图、详情长图和界面截图，再衔接套图、翻译或改图。
 - **大批量处理**：一次处理几十到上千张生图或改图任务，支持样图确认、后台进度、暂停恢复和失败项重试。
 - **常用场景**：通用创作、修图、电商、社媒和营销设计。
 
 ## 对话示例
 
 安装后直接在支持 Agent Skills 的客户端中说：
+
+```text
+蜂鸟AI，下载这个1688商品，分析全部主图，再帮我规划一套Amazon Listing图。
+```
+
+也可以使用更短的“蜂鸟 + 明确需求”，例如“蜂鸟，翻译这张图片”或“蜂鸟，生成一张新品海报”。如果 Agent 平台不支持隐式调用，使用下面的显式形式最可靠：
 
 ```text
 使用 $fengniaoai-skill，把这张商品图里的中文翻译成英文，商品名称也一起翻译。
@@ -38,6 +45,7 @@
 把这张商品图抠成白底图。
 保留商品和包装文字，把背景扩成 1:1 的厨房场景。
 用这张商品图做一套亚马逊 Listing 图。
+下载这个 1688 商品的资料和图片，分析全部主图后帮我规划一套 Amazon Listing 图。
 ```
 
 如果只说“蜂鸟AI翻译”或“蜂鸟AI设计”，Agent 会先用简短易懂的方式询问你想完成什么，再逐步补齐必要素材。
@@ -85,7 +93,7 @@ npx -y skills update fengniaoai-skill -p -y
 
 升级完成后，重新打开 Agent 客户端或开始新对话以加载新版说明。蜂鸟AI凭证保存在用户配置目录中，不会被升级覆盖。
 
-这是一个根 Skill 入口和 5 个内置子 Skill 组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译和电商套图会随根 Skill 一起安装，并由 Agent 按任务自动路由，不需要使用 `--full-depth` 分别安装。
+这是一个根 Skill 入口和 6 个内置子 Skill 组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译、商品资料与识图、电商套图会随根 Skill 一起安装，并由 Agent 按任务自动路由，不需要使用 `--full-depth` 分别安装。
 
 兼容性边界：本项目采用 `SKILL.md`、相对路径资源和本地 CLI 的通用 Agent Skills 结构，并提供 `agents/openai.yaml` 与 `claw.json`。支持 Agent Skills、允许执行本地命令、读写任务文件且能访问 HTTPS 网络的 Agent 客户端可以直接安装使用。不同 Agent 平台尚未统一清单格式和权限模型，因此不承诺所有纯聊天或禁止 shell、文件系统、网络访问的平台零适配运行。
 
@@ -121,6 +129,8 @@ export FENGNIAO_API_KEY="你的 Api key"
 | 抠图、OCR、图片翻译 | ✓ | ✓ | 可直接发送本地图片 |
 | 参考图改图、扩图、2K/4K 高清增强 | ✓ | ✓ | 本地素材由 CLI 自动临时直传 |
 | 电商套图 | ✓ | ✓ | 商品参考图会自动完成临时直传 |
+| 商品采集 | — | ✓ | 支持 1688、淘宝/天猫和 Amazon 商品详情页 |
+| 识图分析 | ✓ | — | 公网图片先由 Agent 下载，再自动临时直传 |
 | 视频翻译 | ✓ | ✓ | 本地视频会自动流式直传 |
 
 2K/4K 能力属于生成式高清增强或高清重绘，不承诺无损超分。图片和视频的格式、大小及语言范围会在执行前由 CLI 校验。
@@ -131,11 +141,13 @@ export FENGNIAO_API_KEY="你的 Api key"
 
 ## 结果自动下载
 
-任务成功后，CLI 默认将生成的图片、视频、音频和字幕下载到当前工作区：
+任务成功后，CLI 默认将生成的图片、视频、音频和字幕下载到当前工作区。单次任务自动建立带时间、动作和短 ID 的唯一目录：
 
 ```text
-output/fengniaoai-skill/
+output/fengniaoai-skill/<YYYYMMDD-HHmmss>-<action>-<short-id>/
 ```
+
+文件名会表达来源与处理动作，例如 `product-expanded-16x9.jpg`、`product-translated-en.png`。用户显式指定 `output_dir` 时直接使用该目录。商品采集会在输出目录下创建 `<platform>-<product_id>/`，分别保存 `product.json`、主图、SKU 图和详情图；识图结果保存在 `analysis/<image-id>-analysis.md`。批量结果直接保存在业务目录下，例如 `<batch_dir>/amazon-main-01.jpg`；内部恢复状态隐藏在 `.fengniao/`，重做保存为 `amazon-main-01-v2.jpg`，不覆盖旧文件。
 
 Agent 会优先展示本地文件。如果某个产物下载失败，已完成的 API 任务仍保持成功，并使用结果中的远程 URL 交付，不会因为本地下载问题重复扣点。
 
@@ -151,6 +163,7 @@ Agent 会优先展示本地文件。如果某个产物下载失败，已完成�
 | `fengniao-image-translate` | 图片翻译、语言与引擎选择、商品文字保护 |
 | `fengniao-video-translate` | 视频字幕翻译、擦字幕、AI 配音与原声克隆 |
 | `fengniao-ecommerce-kit` | 商品一致性控制和多渠道电商套图工作流 |
+| `fengniao-product-insight` | 1688、淘宝/天猫、Amazon 商品采集下载与识图分析 |
 
 ## Repository Structure
 
@@ -158,10 +171,10 @@ Agent 会优先展示本地文件。如果某个产物下载失败，已完成�
 fengniaoai-skill/
 ├── SKILL.md                  # 根 Skill 与对话路由
 ├── agents/openai.yaml        # Codex/OpenAI 客户端展示信息
-├── api/actions.json          # 14 个机器可读动作定义
+├── api/actions.json          # 机器可读动作定义
 ├── claw.json                 # OpenClaw 兼容清单
 ├── scripts/fengniaoai.mjs    # 统一 API、轮询、下载与错误处理
-├── skills/                   # 5 个子 Skill
+├── skills/                   # 6 个子 Skill
 ├── references/               # 语言、音色、接口与电商视觉知识
 └── test/                     # 离线契约测试
 ```

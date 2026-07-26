@@ -95,6 +95,6 @@ node scripts/fengniaoai.mjs account configure --input-stdin
 
 ## 结果自动下载
 
-任务成功后，CLI 默认把最终图片、视频、音频和字幕下载到当前工作区的 `output/fengniaoai-skill/`，并在 `artifacts[].local_path` 返回本地绝对路径。如果命令恰好从 Skill 安装目录运行，则使用 `~/Downloads/fengniaoai-skill/`，避免污染或修改 Skill 包。
+任务成功后，CLI 默认把单次图片、视频、音频和字幕下载到当前工作区的 `output/fengniaoai-skill/<时间>-<action>-<短ID>/`，并使用来源和处理动作清晰命名，在 `artifacts[].local_path` 返回本地绝对路径。用户显式传 `output_dir` 时直接使用该目录。如果命令恰好从 Skill 安装目录运行，则以 `~/Downloads/fengniaoai-skill/` 为输出根目录，避免污染或修改 Skill 包。
 
 Agent 应优先展示本地文件；某个文件下载失败时，任务仍然成功，应使用同一 artifact 保留的远程 `url` 交付。临时关闭自动下载可传 `download_artifacts=false`，指定目录可传 `output_dir`。服务器或 CI 也可设置 `FENGNIAO_AUTO_DOWNLOAD` 和 `FENGNIAO_OUTPUT_DIR`。完整控制字段、大小限制和响应结构见 `references/actions.md`。

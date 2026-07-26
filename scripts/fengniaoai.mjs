@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createReadStream, createWriteStream } from "node:fs"
-import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
+import { access, chmod, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path"
 import { homedir } from "node:os"
 import { createHash, randomUUID } from "node:crypto"
@@ -24,6 +24,13 @@ const IMAGE_BATCH_ACTIONS = new Set(["generate", "transform", "expand", "enhance
 const IMAGE_BATCH_TERMINAL_STATES = new Set(["completed", "failed", "cancelled"])
 const IMAGE_BATCH_FINAL_STATES = new Set(["completed", "cancelled", "partial_failed"])
 const IMAGE_BATCH_GLOBAL_PAUSE_ERRORS = new Set(["RATE_LIMITED", "CREDITS_INSUFFICIENT", "CREDENTIALS_MISSING", "AUTH_ERROR", "PERMISSION_DENIED"])
+const PRODUCT_PLATFORMS = new Set(["1688", "taobao", "amazon"])
+const AMAZON_DOMAINS = new Set([
+  "amazon.com", "amazon.ca", "amazon.com.mx", "amazon.com.br", "amazon.co.uk", "amazon.de",
+  "amazon.fr", "amazon.it", "amazon.es", "amazon.nl", "amazon.se", "amazon.pl",
+  "amazon.com.be", "amazon.co.jp", "amazon.in", "amazon.com.au", "amazon.sg", "amazon.ae",
+  "amazon.sa",
+])
 const IMAGE_LANGUAGE_ALIASES = new Map([
   ["自动", "auto"], ["自动检测", "auto"], ["自动识别", "auto"],
   ["中文", "zh"], ["简体中文", "zh"], ["中文简体", "zh"], ["中文（简）", "zh"], ["中文（简体）", "zh"], ["汉语", "zh"], ["chinese", "zh"],
@@ -128,7 +135,8 @@ function usage() {
     actions: [
       "account configure|balance",
       "skill check-update",
-      "image generate|transform|expand|enhance|batch-submit|batch-list|batch-status|batch-pause|batch-resume|batch-retry|batch-cancel|cutout|ocr-submit|ocr-status|ocr|translate",
+      "image generate|transform|expand|enhance|batch-submit|batch-list|batch-status|batch-pause|batch-resume|batch-retry|batch-cancel|cutout|ocr-submit|ocr-status|ocr|analyze|translate",
+      "product scrape",
       "video translate-submit|translate-status|translate",
     ],
   }
@@ -196,7 +204,8 @@ function updateStateFile() {
 }
 
 function batchRegistryFile() {
-  return join(configDirectory(), "batches.json")
+  const explicit = String(process.env.FENGNIAO_STATE_DIR || "").trim()
+  return join(explicit ? resolve(explicit) : configDirectory(), "batches.json")
 }
 
 async function withBatchRegistryLock(operation) {
@@ -239,6 +248,43 @@ async function readBatchRegistry(registry = batchRegistryFile()) {
     if (error?.code === "ENOENT") return { schema_version: "1.0", batches: [] }
     throw error
   }
+}
+
+async function discoverBatchEntries(rootDirectory, { maxDepth = 6, maxDirectories = 1000 } = {}) {
+  const root = resolve(rootDirectory)
+  const queue = [{ directory: root, depth: 0 }]
+  const entries = []
+  let visited = 0
+  while (queue.length && visited < maxDirectories && entries.length < 200) {
+    const current = queue.shift()
+    visited += 1
+    try {
+      const flatManifest = join(current.directory, ".fengniao", "manifest.json")
+      try {
+        const manifest = JSON.parse(await readFile(flatManifest, "utf8"))
+        if (manifest?.batch_id && Array.isArray(manifest.tasks)) {
+          entries.push({ batch_id: manifest.batch_id, batch_dir: current.directory, created_at: manifest.created_at || null })
+          continue
+        }
+      } catch { /* not a flat batch workspace */ }
+      if (basename(current.directory).startsWith("batch_")) {
+        try {
+          const manifest = JSON.parse(await readFile(join(current.directory, "manifest.json"), "utf8"))
+          if (manifest?.batch_id && Array.isArray(manifest.tasks)) {
+            entries.push({ batch_id: manifest.batch_id, batch_dir: current.directory, created_at: manifest.created_at || null })
+            continue
+          }
+        } catch { /* not a legacy batch directory */ }
+      }
+      if (current.depth >= maxDepth) continue
+      const children = await readdir(current.directory, { withFileTypes: true })
+      for (const child of children) {
+        if (!child.isDirectory() || [".git", ".fengniao", "node_modules", "images"].includes(child.name)) continue
+        queue.push({ directory: join(current.directory, child.name), depth: current.depth + 1 })
+      }
+    } catch { /* an unreadable directory does not block discovery elsewhere */ }
+  }
+  return entries
 }
 
 async function registerBatch(manifest, paths) {
@@ -605,6 +651,10 @@ function mapError(code, msg, requestIdValue) {
     2063: ["TEMPORARY_UNAVAILABLE", true, "OSS 尚未找到上传文件，请使用相同 request_id 重试。"],
     2064: ["INVALID_INPUT", false, "临时文件已过期，请重新选择并上传。"],
     2065: ["TEMPORARY_UNAVAILABLE", true, "临时文件暂时无法校验，请稍后重试。"],
+    2070: ["INVALID_INPUT", false, "请检查识图图片和请求参数。"],
+    2071: ["TEMPORARY_UNAVAILABLE", true, "图片分析失败，请检查图片内容或稍后重试。"],
+    2080: ["INVALID_INPUT", false, "商品平台或链接格式不正确，请提供受支持的完整商品链接。"],
+    2081: ["TEMPORARY_UNAVAILABLE", true, "商品数据采集失败，请检查商品是否存在或稍后重试。"],
     30000: ["CREDITS_INSUFFICIENT", false, `蜂鸟AI 点数不足。请登录 ${LOGIN_URL} 获取点数后重试。`],
     30001: ["RATE_LIMITED", true, "请求频率过高，请稍后重试。"],
     4015: ["INVALID_INPUT", false, msg || "剩余点数查询失败，请检查项目渠道。"],
@@ -614,11 +664,12 @@ function mapError(code, msg, requestIdValue) {
   return new SkillError(errorType, userHint, { retryable, requestId: requestIdValue, code })
 }
 
-async function apiRequest(path, body, currentRequestId) {
+async function apiRequest(path, body, currentRequestId, options = {}) {
   const { projectId, apiKey } = await credentials()
   const baseUrl = String(process.env.FENGNIAO_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "")
   const timeoutMs = Number(process.env.FENGNIAO_REQUEST_TIMEOUT_MS || 190000)
-  const maxAttempts = boundedInteger(process.env.FENGNIAO_API_MAX_ATTEMPTS, 3, { min: 1, max: 5 })
+  const configuredAttempts = boundedInteger(process.env.FENGNIAO_API_MAX_ATTEMPTS, 3, { min: 1, max: 5 })
+  const maxAttempts = boundedInteger(options.maxAttempts, configuredAttempts, { min: 1, max: 5 })
   const retryableCodes = new Set([429, 2061, 2065, 30001])
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     let response
@@ -656,7 +707,14 @@ async function apiRequest(path, body, currentRequestId) {
       }
       throw new SkillError("TEMPORARY_UNAVAILABLE", "蜂鸟AI 返回了无法解析的响应，请稍后重试。", { retryable: true, requestId: currentRequestId })
     }
-    const businessCode = Number(payload?.code ?? response.status)
+    if (!Object.hasOwn(payload || {}, "code")) {
+      throw new SkillError(
+        "TEMPORARY_UNAVAILABLE",
+        "蜂鸟AI 当前 API 环境未返回标准业务响应，请确认对应能力已发布后重试。",
+        { retryable: false, requestId: currentRequestId },
+      )
+    }
+    const businessCode = Number(payload.code)
     if (response.ok && businessCode === 200) return payload
     if (attempt + 1 < maxAttempts && (retryableCodes.has(businessCode) || response.status >= 500)) {
       await wait(retryDelayMs(response, attempt))
@@ -725,26 +783,41 @@ function safeFilePart(value, fallback) {
   return cleaned || fallback
 }
 
-function resolveOutputDirectory(input = {}) {
-  const explicitDirectory = String(input.output_dir || process.env.FENGNIAO_OUTPUT_DIR || "").trim()
+const TASK_SCOPED_DOWNLOAD_ACTIONS = new Set([
+  "image.generate", "image.transform", "image.expand", "image.enhance", "image.cutout", "image.translate",
+  "video.translate", "video.translate-status",
+])
+
+function taskDirectoryName(group, action) {
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15)
+  return `${timestamp}-${safeFilePart(`${group}-${action}`, "task")}-${randomUUID().slice(0, 8)}`
+}
+
+function resolveOutputDirectory(input = {}, context = {}) {
+  const inputDirectory = String(input.output_dir || "").trim()
+  const configuredDirectory = String(process.env.FENGNIAO_OUTPUT_DIR || "").trim()
   const currentDirectory = resolve(process.cwd())
-  const outputDirectory = explicitDirectory
-    ? resolve(explicitDirectory)
+  const baseDirectory = inputDirectory || configuredDirectory
+    ? resolve(inputDirectory || configuredDirectory)
     : isInside(SKILL_ROOT, currentDirectory)
       ? join(homedir(), "Downloads", "fengniaoai-skill")
       : join(currentDirectory, "output", "fengniaoai-skill")
+  const actionKey = context.group && context.action ? `${context.group}.${context.action}` : ""
+  const outputDirectory = !inputDirectory && TASK_SCOPED_DOWNLOAD_ACTIONS.has(actionKey)
+    ? join(baseDirectory, taskDirectoryName(context.group, context.action))
+    : baseDirectory
   if (isInside(SKILL_ROOT, outputDirectory)) {
     throw new SkillError("INVALID_INPUT", "不能把生成结果写入 Skill 安装目录，请改用工作区 output 目录或其他输出目录。")
   }
   return outputDirectory
 }
 
-function prepareDownloadOptions(input) {
+function prepareDownloadOptions(input, context = {}) {
   const enabled = input.download_artifacts === undefined
     ? booleanSetting(process.env.FENGNIAO_AUTO_DOWNLOAD, true)
     : booleanSetting(input.download_artifacts, true)
   if (!enabled) return { enabled: false }
-  const outputDirectory = resolveOutputDirectory(input)
+  const outputDirectory = resolveOutputDirectory(input, context)
   const maximumBytes = Number(process.env.FENGNIAO_MAX_DOWNLOAD_BYTES || DEFAULT_MAX_DOWNLOAD_BYTES)
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     throw new SkillError("INVALID_INPUT", "FENGNIAO_MAX_DOWNLOAD_BYTES 必须是大于 0 的整数。")
@@ -754,6 +827,60 @@ function prepareDownloadOptions(input) {
     outputDirectory,
     filenamePrefix: safeFilePart(input.filename_prefix, ""),
     maximumBytes,
+  }
+}
+
+function inputSourceStem(input = {}) {
+  let source = input.filename
+  if (!source) {
+    for (const field of ["image", "reference_images", "reference_image_urls", "video", "video_url"]) {
+      const value = input[field]
+      source = Array.isArray(value) ? value[0] : value
+      if (typeof source === "string" && source.trim()) break
+      source = null
+    }
+  }
+  if (typeof source !== "string" || !source.trim() || source.startsWith("data:")) return ""
+  try {
+    if (/^https?:\/\//i.test(source)) source = basename(new URL(source).pathname)
+    else source = basename(source)
+  } catch { return "" }
+  return safeFilePart(source.slice(0, source.length - extname(source).length), "")
+}
+
+function ratioFilePart(value) {
+  return String(value || "").trim().toLowerCase().replace(":", "x")
+}
+
+function semanticArtifactStem(actionKey, input, item) {
+  const source = inputSourceStem(input) || "image"
+  const language = safeFilePart(input.target_language || input.lang_to || item.target_language, "")
+  if (actionKey === "image.generate") return "generated-image"
+  if (actionKey === "image.transform") return `${source}-edited`
+  if (actionKey === "image.expand") return `${source}-expanded-${ratioFilePart(input.aspect_ratio) || "image"}`
+  if (actionKey === "image.enhance") return `${source}-enhanced${input.resolution ? `-${String(input.resolution).toLowerCase()}` : ""}`
+  if (actionKey === "image.cutout") return `${source}-cutout-${safeFilePart(input.background || "transparent", "transparent")}`
+  if (actionKey === "image.translate") {
+    if (item.role === "processed") return `${source}-processed-background`
+    return `${source}-translated${language ? `-${language}` : ""}`
+  }
+  if (actionKey === "video.translate" || actionKey === "video.translate-status") {
+    const videoSource = inputSourceStem(input) || safeFilePart(item.task_id, "video")
+    const role = item.role || item.type || "result"
+    return `${videoSource}-${safeFilePart(role, "result")}${language && ["translated", "translated-subtitle"].includes(role) ? `-${language}` : ""}`
+  }
+  return ""
+}
+
+function applySemanticArtifactNames(result, group, action, input) {
+  if (!result?.ok || !Array.isArray(result.artifacts) || input.filename_prefix) return result
+  const actionKey = `${group}.${action}`
+  if (!TASK_SCOPED_DOWNLOAD_ACTIONS.has(actionKey)) return result
+  return {
+    ...result,
+    artifacts: result.artifacts.map((item) => item.filename_stem
+      ? item
+      : { ...item, filename_stem: semanticArtifactStem(actionKey, input, item) }),
   }
 }
 
@@ -808,6 +935,28 @@ async function availablePath(outputDirectory, stem, extension) {
   throw new Error("too many duplicate files")
 }
 
+async function createAvailableDirectory(parentDirectory, stem) {
+  await mkdir(parentDirectory, { recursive: true, mode: 0o700 })
+  for (let index = 0; index < 10000; index += 1) {
+    const suffix = index ? `-${index + 1}` : ""
+    const candidate = join(parentDirectory, `${stem}${suffix}`)
+    try {
+      await mkdir(candidate, { mode: 0o700 })
+      return candidate
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+    }
+  }
+  throw new Error("too many duplicate directories")
+}
+
+function artifactOutputDirectory(baseDirectory, relativeDirectory) {
+  if (!relativeDirectory) return baseDirectory
+  const target = resolve(baseDirectory, String(relativeDirectory))
+  if (!isInside(baseDirectory, target)) throw new Error("结果子目录不能超出输出目录")
+  return target
+}
+
 function validateDownloadUrl(value) {
   const parsed = new URL(value)
   if (parsed.protocol === "https:") return
@@ -822,7 +971,9 @@ async function downloadArtifact(item, options, index) {
   if (!response.ok || !response.body) throw new Error(`下载响应异常（HTTP ${response.status}）`)
   const declaredLength = Number(response.headers.get("content-length") || 0)
   if (declaredLength > options.maximumBytes) throw new Error(`文件超过下载上限 ${options.maximumBytes} 字节`)
-  const temporaryPath = join(options.outputDirectory, `.fengniao-download-${process.pid}-${randomUUID()}.tmp`)
+  const outputDirectory = artifactOutputDirectory(options.outputDirectory, item.relative_dir)
+  await mkdir(outputDirectory, { recursive: true, mode: 0o700 })
+  const temporaryPath = join(outputDirectory, `.fengniao-download-${process.pid}-${randomUUID()}.tmp`)
   let byteCount = 0
   let header = Buffer.alloc(0)
   const limiter = new Transform({
@@ -836,11 +987,12 @@ async function downloadArtifact(item, options, index) {
   try {
     await pipeline(response.body, limiter, createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 }))
     const extension = extensionForDownload(response, item.url, header, item.type)
+    const explicitStem = safeFilePart(item.filename_stem, "")
     const defaultPrefix = safeFilePart(options.filenamePrefix || item.role || item.type, `artifact-${index + 1}`)
-    const stem = options.filenamePrefix
+    const stem = explicitStem || (options.filenamePrefix
       ? safeFilePart(`${options.filenamePrefix}-${item.role || item.type}`, `artifact-${index + 1}`)
-      : defaultPrefix
-    const targetPath = await availablePath(options.outputDirectory, stem, extension)
+      : defaultPrefix)
+    const targetPath = await availablePath(outputDirectory, stem, extension)
     await rename(temporaryPath, targetPath)
     return targetPath
   } catch (error) {
@@ -869,14 +1021,19 @@ async function materializeArtifacts(result, options) {
   }
   for (let index = 0; index < artifacts.length; index += 1) {
     const item = artifacts[index]
+    if (item.local_path) {
+      completed += 1
+      continue
+    }
     if (!item.url || item.role === "source") continue
-    if (downloadedUrls.has(item.url)) {
-      item.local_path = downloadedUrls.get(item.url)
+    const downloadIdentity = [item.url, item.relative_dir || "", item.filename_stem || ""].join("\0")
+    if (downloadedUrls.has(downloadIdentity)) {
+      item.local_path = downloadedUrls.get(downloadIdentity)
       continue
     }
     try {
       item.local_path = await downloadArtifact(item, options, index)
-      downloadedUrls.set(item.url, item.local_path)
+      downloadedUrls.set(downloadIdentity, item.local_path)
       completed += 1
     } catch (error) {
       failed += 1
@@ -889,6 +1046,127 @@ async function materializeArtifacts(result, options) {
     download: { enabled: true, output_dir: options.outputDirectory, completed, failed, warnings },
     ...(warnings.length ? { download_warning: "部分结果未能自动下载，请使用 artifacts 中保留的远程 URL。" } : {}),
   }
+}
+
+function productPlatformFromUrl(value) {
+  let parsed
+  try { parsed = new URL(value) } catch { return null }
+  const host = parsed.hostname.toLowerCase()
+  if (host === "detail.1688.com") return "1688"
+  if (host === "item.taobao.com" || host === "detail.tmall.com") return "taobao"
+  if ([...AMAZON_DOMAINS].some((domain) => host === domain || host.endsWith(`.${domain}`))) return "amazon"
+  return null
+}
+
+function productUrl(input, currentRequestId) {
+  const value = requireString(input, "url", "商品详情页 HTTPS 链接")
+  let parsed
+  try { parsed = new URL(value) } catch { throw new SkillError("INVALID_INPUT", "商品链接不是有效 URL。", { requestId: currentRequestId }) }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port || parsed.hash) {
+    throw new SkillError("INVALID_INPUT", "商品链接必须使用 HTTPS，且不能包含账号、非标准端口或片段。", { requestId: currentRequestId })
+  }
+  if (value.length > 2048) throw new SkillError("INVALID_INPUT", "商品链接不能超过 2048 个字符。", { requestId: currentRequestId })
+  return value
+}
+
+function selectedProductImageGroups(input, currentRequestId) {
+  const groups = input.image_groups ?? ["main", "sku", "detail"]
+  if (!Array.isArray(groups) || !groups.length) throw new SkillError("INVALID_INPUT", "image_groups 至少包含 main、sku 或 detail 中的一项。", { requestId: currentRequestId })
+  const normalized = groups.map((group) => String(group || "").trim().toLowerCase())
+  if (normalized.some((group) => !new Set(["main", "sku", "detail"]).has(group))) throw new SkillError("INVALID_INPUT", "image_groups 仅支持 main、sku 和 detail。", { requestId: currentRequestId })
+  return [...new Set(normalized)]
+}
+
+async function productScrape(input) {
+  const currentRequestId = requestId(input)
+  const url = productUrl(input, currentRequestId)
+  const inferredPlatform = productPlatformFromUrl(url)
+  const platform = String(input.platform || inferredPlatform || "").trim().toLowerCase()
+  if (!PRODUCT_PLATFORMS.has(platform)) throw new SkillError("INVALID_INPUT", "请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。", { requestId: currentRequestId })
+  if (!inferredPlatform) throw new SkillError("INVALID_INPUT", "商品链接域名不受支持，请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。", { requestId: currentRequestId })
+  if (inferredPlatform !== platform) throw new SkillError("INVALID_INPUT", "platform 与商品链接所属平台不一致。", { requestId: currentRequestId })
+  const groups = selectedProductImageGroups(input, currentRequestId)
+  const body = { request_id: currentRequestId, platform, url }
+  if (input.customer_id !== undefined && input.customer_id !== null && String(input.customer_id).trim()) body.customer_id = String(input.customer_id).trim()
+  const payload = await apiRequest("/api/v1/product/scrape", body, currentRequestId, { maxAttempts: 1 })
+  const result = payload.result || {}
+  const productId = safeFilePart(result.product_id, "product")
+  const productStem = safeFilePart(`${result.platform || platform}-${productId}`, `product-${productId}`)
+  const downloadOptions = prepareDownloadOptions(input)
+  let productDirectory = null
+  let productRelativeDirectory = productStem
+  let localSaveWarning = null
+  const artifacts = []
+  if (downloadOptions.enabled) {
+    try {
+      productDirectory = await createAvailableDirectory(downloadOptions.outputDirectory, productStem)
+      productRelativeDirectory = relative(downloadOptions.outputDirectory, productDirectory)
+      const metadataPath = join(productDirectory, "product.json")
+      await writeJsonAtomic(metadataPath, { request_id: payload.request_id || currentRequestId, result, usage: payload.usage || {} })
+      artifacts.push({ type: "json", role: "product-metadata", local_path: metadataPath })
+    } catch {
+      productDirectory = null
+      localSaveWarning = "商品采集已完成，但暂时无法创建本地商品目录；请使用返回的数据和图片 URL。"
+    }
+  }
+  const imageSets = { main: result.main_images || [], sku: result.sku_images || [], detail: result.detail_images || [] }
+  for (const group of groups) {
+    const urls = Array.isArray(imageSets[group]) ? imageSets[group] : []
+    for (let index = 0; index < urls.length; index += 1) {
+      artifacts.push(artifact("image", urls[index], {
+        role: `${group}-${index + 1}`,
+        product_id: result.product_id,
+        relative_dir: join(productRelativeDirectory, "images", group),
+        filename_stem: `${productId}-${group}-${String(index + 1).padStart(3, "0")}`,
+      }))
+    }
+  }
+  return success("product.scrape", payload.request_id || currentRequestId, "completed", {
+    artifacts,
+    data: { ...result, product_dir: productDirectory, selected_image_groups: groups, ...(localSaveWarning ? { local_save_warning: localSaveWarning } : {}) },
+    usage: payload.usage,
+  })
+}
+
+async function imageAnalyze(input, refreshIndex = 0) {
+  const currentRequestId = requestId(input)
+  const source = requireString(input, "image", "要分析的本地图片")
+  const normalizedSource = normalizeAssetInput(source, currentRequestId)
+  if (/^https?:\/\//i.test(normalizedSource)) throw new SkillError("INVALID_INPUT", "识图分析需要本地图片；请先下载图片，再交给我分析。", { requestId: currentRequestId })
+  const asset = await materializeInputAsset(normalizedSource, { purpose: "image_reference", currentRequestId, refreshIndex })
+  if (!asset.key) throw new SkillError("INVALID_INPUT", "识图分析需要上传后的本地图片。", { requestId: currentRequestId })
+  const body = { request_id: currentRequestId, image_key: asset.key }
+  if (input.customer_id !== undefined && input.customer_id !== null && String(input.customer_id).trim()) body.customer_id = String(input.customer_id).trim()
+  let payload
+  try {
+    payload = await apiRequest("/api/v1/img/analyze", body, currentRequestId, { maxAttempts: 1 })
+  } catch (error) {
+    if (shouldRefreshAsset(error, refreshIndex)) return imageAnalyze(input, refreshIndex + 1)
+    throw error
+  }
+  const result = { analysis: String(payload.result?.analysis || "").trim() }
+  if (!result.analysis) throw new SkillError("TEMPORARY_UNAVAILABLE", "图片分析完成但没有返回有效内容，请稍后重试。", { retryable: true, requestId: currentRequestId })
+  const artifacts = []
+  let localSaveWarning = null
+  const downloadOptions = prepareDownloadOptions(input)
+  if (downloadOptions.enabled) {
+    try {
+      const outputDirectory = join(downloadOptions.outputDirectory, "analysis")
+      await mkdir(outputDirectory, { recursive: true, mode: 0o700 })
+      const sourceName = safeFilePart(input.analysis_id || basename(normalizedSource, extname(normalizedSource)), "image")
+      const analysisPath = await availablePath(outputDirectory, `${sourceName}-analysis`, ".md")
+      const markdown = `# 图片分析\n\n${result.analysis}\n\n- Request ID：${payload.request_id || currentRequestId}\n`
+      await writeFile(analysisPath, markdown, { mode: 0o600 })
+      artifacts.push({ type: "text", role: "analysis", local_path: analysisPath })
+    } catch {
+      localSaveWarning = "识图分析已完成，但暂时无法保存本地分析文件；请直接使用返回的分析文本。"
+    }
+  }
+  return success("image.analyze", payload.request_id || currentRequestId, "completed", {
+    artifacts,
+    data: { ...result, ...(localSaveWarning ? { local_save_warning: localSaveWarning } : {}) },
+    usage: payload.usage,
+  })
 }
 
 async function accountBalance(input) {
@@ -1113,16 +1391,19 @@ async function generateImage(action, input, refreshIndex = 0) {
   })
 }
 
-function batchPaths(batchDirectory) {
+function batchPaths(batchDirectory, layout = "legacy") {
   const directory = resolve(batchDirectory)
+  const stateDirectory = layout === "flat" ? join(directory, ".fengniao") : directory
   return {
     directory,
-    manifest: join(directory, "manifest.json"),
-    control: join(directory, "control.json"),
-    progress: join(directory, "progress.json"),
-    results: join(directory, "results"),
-    lock: join(directory, ".worker.lock"),
-    cancelled: join(directory, ".cancelled"),
+    layout,
+    state: stateDirectory,
+    manifest: join(stateDirectory, "manifest.json"),
+    control: join(stateDirectory, "control.json"),
+    progress: join(stateDirectory, "progress.json"),
+    results: layout === "flat" ? directory : join(directory, "results"),
+    lock: join(stateDirectory, ".worker.lock"),
+    cancelled: join(stateDirectory, ".cancelled"),
   }
 }
 
@@ -1140,14 +1421,18 @@ async function writeJsonAtomic(file, value, mode = 0o600) {
 }
 
 async function readBatchManifest(batchDirectory) {
-  const paths = batchPaths(batchDirectory)
-  try {
-    const manifest = JSON.parse(await readFile(paths.manifest, "utf8"))
-    if (manifest?.schema_version !== "1.0" || !manifest?.batch_id || !Array.isArray(manifest.tasks)) throw new Error("invalid batch manifest")
-    return { manifest, paths }
-  } catch {
-    throw new SkillError("INVALID_INPUT", "找不到有效的蜂鸟AI批量任务，请检查 batch_dir。")
+  const directory = resolve(batchDirectory)
+  const candidates = basename(directory) === ".fengniao"
+    ? [batchPaths(dirname(directory), "flat")]
+    : [batchPaths(directory, "flat"), batchPaths(directory, "legacy")]
+  for (const paths of candidates) {
+    try {
+      const manifest = JSON.parse(await readFile(paths.manifest, "utf8"))
+      if (!new Set(["1.0", "1.1"]).has(manifest?.schema_version) || !manifest?.batch_id || !Array.isArray(manifest.tasks)) continue
+      return { manifest, paths }
+    } catch { /* try the other supported layout */ }
   }
+  throw new SkillError("INVALID_INPUT", "找不到有效的蜂鸟AI批量任务，请检查 batch_dir。")
 }
 
 function batchSummary(manifest) {
@@ -1183,6 +1468,8 @@ function publicBatchData(manifest, paths, { includeTasks = false } = {}) {
   return {
     batch_id: manifest.batch_id,
     batch_dir: paths.directory,
+    workspace_dir: paths.directory,
+    layout: paths.layout,
     state: manifest.state,
     summary: batchSummary(manifest),
     estimated_credits: manifest.estimated_credits,
@@ -1286,6 +1573,24 @@ function launchBatchWorker(batchDirectory) {
   return child.pid
 }
 
+async function createBatchWorkspace(input) {
+  const baseDirectory = resolveOutputDirectory(input)
+  if (!String(input.output_dir || "").trim()) {
+    return createAvailableDirectory(baseDirectory, taskDirectoryName("image", "batch"))
+  }
+  await mkdir(baseDirectory, { recursive: true, mode: 0o700 })
+  const occupied = [batchPaths(baseDirectory, "flat").manifest, batchPaths(baseDirectory, "legacy").manifest]
+  for (const manifestPath of occupied) {
+    try {
+      await access(manifestPath)
+      return createAvailableDirectory(dirname(baseDirectory), basename(baseDirectory))
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+  }
+  return baseDirectory
+}
+
 async function imageBatchSubmit(input) {
   if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 1000) {
     throw new SkillError("INVALID_INPUT", "批量生图 tasks 必须包含 1 到 1000 个任务。")
@@ -1308,11 +1613,12 @@ async function imageBatchSubmit(input) {
   const previewCount = boundedInteger(input.preview_count, defaultPreviewCount || 1, { min: 0, max: Math.min(10, tasks.length) })
   const effectivePreviewCount = input.preview_count === 0 || defaultPreviewCount === 0 && input.preview_count === undefined ? 0 : previewCount
   const batchId = `batch_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`
-  const root = join(resolveOutputDirectory(input), "batches")
-  const paths = batchPaths(join(root, batchId))
-  await mkdir(paths.results, { recursive: true, mode: 0o700 })
+  const workspaceDirectory = await createBatchWorkspace(input)
+  const paths = batchPaths(workspaceDirectory, "flat")
+  await mkdir(paths.state, { recursive: true, mode: 0o700 })
   const manifest = {
-    schema_version: "1.0",
+    schema_version: "1.1",
+    layout: "flat",
     batch_id: batchId,
     state: "awaiting_start_confirmation",
     created_at: new Date().toISOString(),
@@ -1336,7 +1642,7 @@ async function imageBatchSubmit(input) {
   try {
     await registerBatch(manifest, paths)
   } catch {
-    manifest.registry_warning = "批次已创建，但未写入最近批次索引；请保留本次返回的 batch_dir。"
+    manifest.registry_warning = "用户级批次索引未写入；仍可通过结果目录发现并恢复本批次。"
     try { await persistBatch(manifest, paths) } catch { /* the batch remains usable through batch_dir */ }
   }
   return success("image.batch-submit", batchId, "awaiting_confirmation", {
@@ -1352,15 +1658,24 @@ async function imageBatchSubmit(input) {
 async function imageBatchList(input) {
   const limit = boundedInteger(input.limit, 20, { min: 1, max: 100 })
   const includeCompleted = input.include_completed === undefined ? true : booleanSetting(input.include_completed, true)
-  let registry
+  let registry = { schema_version: "1.0", batches: [] }
+  let registryWarning = null
   try {
     registry = await readBatchRegistry()
   } catch {
-    throw new SkillError("TEMPORARY_UNAVAILABLE", "最近批次索引暂时无法读取，请稍后重试。", { retryable: true })
+    registryWarning = "用户级批次索引暂时无法读取，已改从结果目录查找。"
   }
+  const discoveryRoot = String(input.output_dir || "").trim() ? resolve(input.output_dir) : resolveOutputDirectory({})
+  const discovered = await discoverBatchEntries(discoveryRoot)
+  const indexedEntries = String(input.output_dir || "").trim()
+    ? registry.batches.filter((entry) => entry?.batch_dir && isInside(discoveryRoot, resolve(entry.batch_dir)))
+    : registry.batches
+  const mergedEntries = [...indexedEntries, ...discovered]
+    .filter((entry, index, entries) => entry?.batch_id && entries.findIndex((candidate) => candidate?.batch_id === entry.batch_id) === index)
+    .sort((left, right) => Date.parse(right.created_at || 0) - Date.parse(left.created_at || 0))
   const batches = []
   let missingCount = 0
-  for (const entry of registry.batches) {
+  for (const entry of mergedEntries) {
     if (batches.length >= limit) break
     try {
       const result = await imageBatchStatus({ batch_dir: entry.batch_dir })
@@ -1382,7 +1697,7 @@ async function imageBatchList(input) {
     }
   }
   return success("image.batch-list", requestId(input), "completed", {
-    data: { batches, count: batches.length, missing_count: missingCount },
+    data: { batches, count: batches.length, missing_count: missingCount, discovery_root: discoveryRoot, ...(registryWarning ? { registry_warning: registryWarning } : {}) },
   })
 }
 
@@ -1500,11 +1815,24 @@ async function imageBatchRetry(input) {
     await persistBatch(manifest, paths)
     return success("image.batch-retry", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
   }
-  const selected = Array.isArray(input.task_ids) && input.task_ids.length ? new Set(input.task_ids.map(String)) : null
-  const retryTasks = manifest.tasks.filter((task) => task.status === "failed" && (selected ? selected.has(task.id) : task.error?.retryable === true))
+  let selected = null
+  if (input.task_ids !== undefined) {
+    if (!Array.isArray(input.task_ids) || !input.task_ids.length) throw new SkillError("INVALID_INPUT", "task_ids 必须是非空任务 ID 数组。")
+    const requestedIds = input.task_ids.map((value) => String(value || "").trim())
+    if (requestedIds.some((value) => !value)) throw new SkillError("INVALID_INPUT", "task_ids 不能包含空任务 ID。")
+    selected = new Set(requestedIds)
+    const tasksById = new Map(manifest.tasks.map((task) => [task.id, task]))
+    const missingIds = [...selected].filter((id) => !tasksById.has(id))
+    if (missingIds.length) throw new SkillError("INVALID_INPUT", `找不到任务 ID：${missingIds.join("、")}。请先用 batch-status 查看任务清单。`)
+    const unavailableIds = [...selected].filter((id) => !["completed", "failed"].includes(tasksById.get(id).status))
+    if (unavailableIds.length) throw new SkillError("INVALID_INPUT", `以下任务尚未完成或失败，不能重做：${unavailableIds.join("、")}。`)
+  }
+  const retryTasks = manifest.tasks.filter((task) => selected
+    ? selected.has(task.id) && ["completed", "failed"].includes(task.status)
+    : task.status === "failed" && task.error?.retryable === true)
   if (!retryTasks.length) {
     const hint = selected
-      ? "没有符合条件的失败任务可以重试。"
+      ? "没有符合条件的已完成或失败任务可以重做。"
       : "没有可自动重试的失败任务；如需重做不可重试项，请明确提供 task_ids。"
     throw new SkillError("INVALID_INPUT", hint)
   }
@@ -1516,7 +1844,7 @@ async function imageBatchRetry(input) {
         retry_count: retryTasks.length,
         estimated_retry_credits: estimatedRetryCredits,
         confirmation_required: true,
-        confirmation_hint: `重试 ${retryTasks.length} 张预计额外消耗 ${estimatedRetryCredits} 点，确认后重新排队。`,
+        confirmation_hint: `重做 ${retryTasks.length} 张预计额外消耗 ${estimatedRetryCredits} 点，确认后重新排队并保留旧结果。`,
         next_action: "image.batch-retry",
       },
     })
@@ -1637,10 +1965,15 @@ async function executeBatchTask(task, manifest, paths, persist) {
         throw error
       }
     }
-    const downloaded = await materializeArtifacts(result, {
+    const resultStem = task.attempts > 1 ? `${task.id}-v${task.attempts}` : task.id
+    const namedResult = {
+      ...result,
+      artifacts: result.artifacts.map((item) => item.role === "source" ? item : { ...item, filename_stem: resultStem }),
+    }
+    const downloaded = await materializeArtifacts(namedResult, {
       enabled: manifest.download_artifacts,
       outputDirectory: paths.results,
-      filenamePrefix: task.id,
+      filenamePrefix: "",
       maximumBytes: Number(process.env.FENGNIAO_MAX_DOWNLOAD_BYTES || DEFAULT_MAX_DOWNLOAD_BYTES),
     })
     task.status = "completed"
@@ -1816,7 +2149,7 @@ async function imageBatchResume(input) {
     await persistBatch(manifest, paths)
     return success("image.batch-resume", manifest.batch_id, "cancelled", { data: publicBatchData(manifest, paths) })
   }
-  if (input.background === false) return imageBatchWorker({ batch_dir: paths.directory })
+  if (input.background !== true) return imageBatchWorker({ batch_dir: paths.directory })
   const pid = launchBatchWorker(paths.directory)
   return success("image.batch-resume", manifest.batch_id, "starting", { data: { ...publicBatchData(manifest, paths), worker_pid: pid, message: "批量任务已在后台启动，可使用 batch-status 查看进度。" } })
 }
@@ -2122,13 +2455,13 @@ async function videoStatus(input) {
   const result = payload.result || {}
   const state = result.status || "pending"
   const resultArtifacts = (item) => [
-    artifact("video", item.video_url, { role: "translated", task_id: item.task_id }),
-    artifact("image", item.cover_url, { role: "cover", task_id: item.task_id }),
-    artifact("audio", item.assets?.original_audio_url, { role: "original-audio", task_id: item.task_id }),
-    artifact("subtitle", item.assets?.translated_subtitle_srt_url, { role: "translated-subtitle", task_id: item.task_id }),
-    artifact("subtitle", item.assets?.original_dialog_srt_url, { role: "original-dialog", task_id: item.task_id }),
-    artifact("subtitle", item.assets?.original_intro_srt_url, { role: "original-intro", task_id: item.task_id }),
-    artifact("video", item.assets?.erased_video_url, { role: "subtitle-erased", task_id: item.task_id }),
+    artifact("video", item.video_url, { role: "translated", task_id: item.task_id, target_language: item.target_language }),
+    artifact("image", item.cover_url, { role: "cover", task_id: item.task_id, target_language: item.target_language }),
+    artifact("audio", item.assets?.original_audio_url, { role: "original-audio", task_id: item.task_id, target_language: item.target_language }),
+    artifact("subtitle", item.assets?.translated_subtitle_srt_url, { role: "translated-subtitle", task_id: item.task_id, target_language: item.target_language }),
+    artifact("subtitle", item.assets?.original_dialog_srt_url, { role: "original-dialog", task_id: item.task_id, target_language: item.target_language }),
+    artifact("subtitle", item.assets?.original_intro_srt_url, { role: "original-intro", task_id: item.task_id, target_language: item.target_language }),
+    artifact("video", item.assets?.erased_video_url, { role: "subtitle-erased", task_id: item.task_id, target_language: item.target_language }),
   ]
   const artifacts = [...resultArtifacts(result), ...(result.tasks || []).flatMap(resultArtifacts)]
   return success("video.translate-status", payload.request_id || currentRequestId, state, {
@@ -2163,7 +2496,9 @@ async function run(group, action, input) {
   if (group === "image" && action === "ocr-submit") return ocrSubmit(input)
   if (group === "image" && action === "ocr-status") return ocrStatus(input)
   if (group === "image" && action === "ocr") return ocr(input)
+  if (group === "image" && action === "analyze") return imageAnalyze(input)
   if (group === "image" && action === "translate") return translateImage(input)
+  if (group === "product" && action === "scrape") return productScrape(input)
   if (group === "video" && action === "translate-submit") return videoSubmit(input)
   if (group === "video" && action === "translate-status") return videoStatus(input)
   if (group === "video" && action === "translate") return videoTranslate(input)
@@ -2174,9 +2509,10 @@ async function main() {
   try {
     const parsed = await parseArgs(process.argv.slice(2))
     if (parsed.help) return printJson(usage())
-    const downloadOptions = prepareDownloadOptions(parsed.input)
+    const downloadOptions = prepareDownloadOptions(parsed.input, { group: parsed.group, action: parsed.action })
     const result = await run(parsed.group, parsed.action, parsed.input)
-    printJson(await materializeArtifacts(result, downloadOptions))
+    const namedResult = applySemanticArtifactNames(result, parsed.group, parsed.action, parsed.input)
+    printJson(await materializeArtifacts(namedResult, downloadOptions))
   } catch (error) {
     const normalized = error instanceof SkillError
       ? error

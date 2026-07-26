@@ -1,8 +1,8 @@
 {
   "name": "fengniaoai-skill",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "author": "fengniaoai",
-  "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译。",
+  "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译，并支持商品资料采集与识图分析。",
   "license": "Apache-2.0",
   "entry": "SKILL.md",
   "homepage": "https://fengniaoai.com/",
@@ -24,6 +24,8 @@
     "ecommerce",
     "product-images",
     "batch-image-generation",
+    "product-scraping",
+    "image-analysis",
     "生图",
     "改图",
     "扩图",
@@ -35,13 +37,15 @@
     "AI生图",
     "社媒设计",
     "营销设计",
-    "蜂鸟AI"
+    "蜂鸟AI",
+    "蜂鸟"
   ],
   "models": ["claude-*", "gpt-*", "gemini-*"],
   "permissions": ["network", "filesystem", "shell"],
   "triggers": {
     "keywords": [
       "蜂鸟AI",
+      "蜂鸟",
       "蜂鸟AI翻译",
       "蜂鸟翻译",
       "蜂鸟AI设计",
@@ -93,7 +97,18 @@
       "制作电商套图",
       "生成电商套图",
       "商品主图",
-      "Listing套图"
+      "Listing套图",
+      "采集商品信息",
+      "解析商品链接",
+      "下载1688商品",
+      "下载商品图片",
+      "获取Amazon商品",
+      "识图分析",
+      "分析图片",
+      "分析商品图",
+      "分析详情长图",
+      "分析截图",
+      "看看图片里有什么"
     ]
   },
   "config": {
@@ -132,6 +147,11 @@
     "fengniao-ecommerce-kit": {
       "entry": "skills/fengniao-ecommerce-kit/SKILL.md",
       "description": "商品一致性控制、多用途主图和多渠道电商套图。",
+      "status": "active"
+    },
+    "fengniao-product-insight": {
+      "entry": "skills/fengniao-product-insight/SKILL.md",
+      "description": "采集 1688、淘宝/天猫和 Amazon 商品资料与图片，并分析商品图、详情长图或界面截图。",
       "status": "active"
     }
   }

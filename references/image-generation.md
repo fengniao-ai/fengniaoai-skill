@@ -30,6 +30,7 @@
 - 电商活动主图必须先锁定商品一致性：参考图商品是唯一核心主体，不改变商品品类、容器形状、包装结构、标签布局、主色和可辨认文字；只调整背景、光影、活动氛围和主图排版。
 - 多参考图按编号建立职责：第 1 张锁定主体与比例，后续图片只补充明确角度、结构、材质、文字或风格。Prompt 中使用 `reference_roles` 明确每张图的用途，避免模型把多个商品拼成一个新主体。
 - 图片内需要出现指定文案时逐字保留，用明确引号标识；不要自行添加价格、折扣、功效、认证或品牌承诺。
+- 用户指定产物语言时，将目标语言作为独立约束写入 Prompt；它不随 Agent 的对话语言变化。用户没有提供逐字文案时，只能用目标语言表达已经确认的内容，不能借翻译或本地化新增事实。
 - 扩图只生成原画布外需要补充的内容，并强调保持主体、可见文字、色彩、光线和原构图关系。
 - 高清增强强调保持主体身份、产品细节、可见文字和构图，不添加或删除内容；仍需向用户说明结果属于生成式重绘。
 
@@ -45,7 +46,7 @@
 
 ## 大批量与中断恢复
 
-一次超过 10 张时使用 `image batch-submit`，不要由 Agent 同时拼接大量单图命令。输入由可复用的 `shared` 和最多 1000 个 `tasks` 组成；每个 task 可设置 `id`、`action` 以及该任务自己的 Prompt、比例、模型或参考图。`shared` 适合放整批相同的参考图、参考职责、模型和通用参数。
+共享同一组商品参考图的电商套图从 2 张起优先使用 `image batch-submit`；普通独立任务超过 10 张时必须使用。输入由可复用的 `shared` 和最多 1000 个 `tasks` 组成；每个 task 可设置 `id`、`action` 以及该任务自己的 Prompt、比例、模型或参考图。`shared` 适合放整批相同的参考图、参考职责、模型和通用参数。
 
 `batch-submit` 创建 `manifest.json` 后返回 `awaiting_start_confirmation`、预计点数和绝对 `batch_dir`，不会立即请求付费接口。确认后使用：
 
@@ -59,6 +60,6 @@ node scripts/fengniaoai.mjs image batch-resume --input-json '{"batch_dir":"/abso
 node scripts/fengniaoai.mjs image batch-resume --input-json '{"batch_dir":"/absolute/path/to/batch","approve_preview":true}'
 ```
 
-状态、暂停、取消和失败项重试分别使用 `batch-status`、`batch-pause`、`batch-cancel`、`batch-retry`。后台不可用的平台可在 `batch-resume` 中传 `background=false` 前台运行；状态仍逐张保存，进程中断后可再次 resume。完整并发与限流策略见 `references/actions.md`。
+状态、暂停、取消和失败项重试分别使用 `batch-status`、`batch-pause`、`batch-cancel`、`batch-retry`。`batch-resume` 默认前台运行；只有明确支持长驻进程的平台才传 `background=true`。状态始终逐张保存，进程中断后可再次 resume。完整并发与限流策略见 `references/actions.md`。
 
 新对话不知道 `batch_dir` 时先调用 `image batch-list`，默认返回最近 20 个批次的状态、汇总和结果目录，再选择目标批次查询或继续；不要让用户去文件系统手工寻找。若三张样图全部失败，批次进入 `preview_failed`，不能用 `approve_preview` 强行继续，应先处理失败原因或重建批次。
