@@ -670,6 +670,7 @@ async function apiRequest(path, body, currentRequestId, options = {}) {
   const timeoutMs = Number(process.env.FENGNIAO_REQUEST_TIMEOUT_MS || 190000)
   const configuredAttempts = boundedInteger(process.env.FENGNIAO_API_MAX_ATTEMPTS, 3, { min: 1, max: 5 })
   const maxAttempts = boundedInteger(options.maxAttempts, configuredAttempts, { min: 1, max: 5 })
+  const retryUncertainFailures = options.retryUncertainFailures !== false
   const retryableCodes = new Set([429, 2061, 2065, 30001])
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     let response
@@ -686,7 +687,7 @@ async function apiRequest(path, body, currentRequestId, options = {}) {
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
-      if (attempt + 1 < maxAttempts) {
+      if (retryUncertainFailures && attempt + 1 < maxAttempts) {
         await wait(retryDelayMs(null, attempt))
         continue
       }
@@ -701,7 +702,7 @@ async function apiRequest(path, body, currentRequestId, options = {}) {
     try {
       payload = await response.json()
     } catch {
-      if (attempt + 1 < maxAttempts && response.status >= 500) {
+      if (retryUncertainFailures && attempt + 1 < maxAttempts && response.status >= 500) {
         await wait(retryDelayMs(response, attempt))
         continue
       }
@@ -716,7 +717,7 @@ async function apiRequest(path, body, currentRequestId, options = {}) {
     }
     const businessCode = Number(payload.code)
     if (response.ok && businessCode === 200) return payload
-    if (attempt + 1 < maxAttempts && (retryableCodes.has(businessCode) || response.status >= 500)) {
+    if (attempt + 1 < maxAttempts && (retryableCodes.has(businessCode) || retryUncertainFailures && response.status >= 500)) {
       await wait(retryDelayMs(response, attempt))
       continue
     }
@@ -881,6 +882,36 @@ function applySemanticArtifactNames(result, group, action, input) {
     artifacts: result.artifacts.map((item) => item.filename_stem
       ? item
       : { ...item, filename_stem: semanticArtifactStem(actionKey, input, item) }),
+  }
+}
+
+function applyProductWorkflowReadiness(result, group, action) {
+  if (group !== "product" || action !== "scrape" || !result?.ok) return result
+  const metadataReady = result.artifacts?.some((item) => item.role === "product-metadata" && item.local_path)
+  const mainImageReady = result.artifacts?.some((item) => /^main-\d+$/.test(String(item.role || "")) && item.local_path)
+  const ready = Boolean(metadataReady && mainImageReady)
+  return {
+    ...result,
+    data: { ...result.data, workflow_ready_for_downstream: ready },
+    workflow: {
+      scope: "product_url",
+      state: ready ? "ready" : "blocked",
+      allow_downstream_actions: ready,
+      unrelated_actions_allowed: true,
+      ...(ready ? {} : {
+        terminal_for_url_workflow: true,
+        automatic_retry: false,
+        allow_browser_fallback: false,
+        requires_user_confirmation_for_retry: true,
+        reason: !metadataReady ? "product_metadata_not_saved" : "product_main_image_not_downloaded",
+        user_hint: "商品资料或主图未完整保存，已停止基于该商品链接的后续分析和生成。其他独立任务不受影响；你可以确认重试原链接、提供另一个可信商品链接，或上传真实商品素材。",
+        safe_next_steps: [
+          "retry_original_url_with_user_confirmation",
+          "provide_another_trusted_product_url",
+          "upload_trusted_product_materials",
+        ],
+      }),
+    },
   }
 }
 
@@ -1058,6 +1089,21 @@ function productPlatformFromUrl(value) {
   return null
 }
 
+function productIdFromUrl(value, platform) {
+  let parsed
+  try { parsed = new URL(value) } catch { return null }
+  if (platform === "1688") return parsed.pathname.match(/^\/offer\/(\d{9,})\.html$/i)?.[1] || null
+  if (platform === "taobao") {
+    const productId = parsed.searchParams.get("id")
+    return /^\d{9,}$/.test(productId || "") ? productId : null
+  }
+  if (platform === "amazon") {
+    const productId = parsed.pathname.match(/\/(?:dp|gp\/product)\/([a-z0-9]{10})(?:\/|$)/i)?.[1]
+    return productId ? productId.toUpperCase() : null
+  }
+  return null
+}
+
 function productUrl(input, currentRequestId) {
   const value = requireString(input, "url", "商品详情页 HTTPS 链接")
   let parsed
@@ -1085,11 +1131,19 @@ async function productScrape(input) {
   if (!PRODUCT_PLATFORMS.has(platform)) throw new SkillError("INVALID_INPUT", "请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。", { requestId: currentRequestId })
   if (!inferredPlatform) throw new SkillError("INVALID_INPUT", "商品链接域名不受支持，请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。", { requestId: currentRequestId })
   if (inferredPlatform !== platform) throw new SkillError("INVALID_INPUT", "platform 与商品链接所属平台不一致。", { requestId: currentRequestId })
+  const expectedProductId = productIdFromUrl(url, platform)
+  if (!expectedProductId) throw new SkillError("INVALID_INPUT", "商品链接格式不受支持，请提供包含有效商品 ID 的完整详情页链接。", { requestId: currentRequestId })
   const groups = selectedProductImageGroups(input, currentRequestId)
   const body = { request_id: currentRequestId, platform, url }
   if (input.customer_id !== undefined && input.customer_id !== null && String(input.customer_id).trim()) body.customer_id = String(input.customer_id).trim()
   const payload = await apiRequest("/api/v1/product/scrape", body, currentRequestId, { maxAttempts: 1 })
-  const result = payload.result || {}
+  const result = payload.result
+  const resultPlatform = String(result?.platform || "").trim().toLowerCase()
+  const resultProductId = String(result?.product_id || "").trim()
+  const normalizedResultProductId = platform === "amazon" ? resultProductId.toUpperCase() : resultProductId
+  if (!result || Array.isArray(result) || typeof result !== "object" || !resultProductId || resultPlatform !== platform || normalizedResultProductId !== expectedProductId) {
+    throw new SkillError("TEMPORARY_UNAVAILABLE", "商品采集未返回完整且匹配的商品资料，已停止后续处理，请稍后重试。", { retryable: true, requestId: payload.request_id || currentRequestId })
+  }
   const productId = safeFilePart(result.product_id, "product")
   const productStem = safeFilePart(`${result.platform || platform}-${productId}`, `product-${productId}`)
   const downloadOptions = prepareDownloadOptions(input)
@@ -1308,7 +1362,13 @@ async function prepareReferences(input, refreshIndex = 0) {
 }
 
 function promptWithReferenceRoles(prompt, input, referenceCount) {
-  if (referenceCount < 2) return prompt
+  const referenceMode = String(input.reference_mode || "single_subject").trim().toLowerCase()
+  if (!new Set(["single_subject", "composition", "variants"]).has(referenceMode)) {
+    throw new SkillError("INVALID_INPUT", "reference_mode 仅支持 single_subject、composition 或 variants。", { requestId: input.request_id })
+  }
+  if (new Set(["composition", "variants"]).has(referenceMode) && referenceCount < 2) {
+    throw new SkillError("INVALID_INPUT", `${referenceMode} 模式至少需要两张参考图。`, { requestId: input.request_id })
+  }
   let roles = input.reference_roles
   if (roles !== undefined) {
     if (!Array.isArray(roles) || roles.length !== referenceCount) throw new SkillError("INVALID_INPUT", "reference_roles 必须与参考图数量一致。", { requestId: input.request_id })
@@ -1317,13 +1377,21 @@ function promptWithReferenceRoles(prompt, input, referenceCount) {
       if (!normalized || normalized.length > 120) throw new SkillError("INVALID_INPUT", "每个参考图职责必须为 1 到 120 个字符。", { requestId: input.request_id })
       return normalized
     })
-  } else {
+  } else if (referenceMode === "composition") {
+    throw new SkillError("INVALID_INPUT", "composition 模式必须为每张参考图提供 reference_roles。", { requestId: input.request_id })
+  } else if (referenceCount >= 2) {
     roles = Array.from({ length: referenceCount }, (_, index) => index === 0
       ? "主参考图：锁定主体身份、核心外观、构图关系，并作为 original 比例基准"
       : "补充参考图：仅补充同一主体的其他角度、结构、材质或可见细节，不引入新的主体")
   }
+  if (referenceCount < 2) return prompt
   const roleLines = roles.map((role, index) => `- 参考图 ${index + 1}：${role}`).join("\n")
-  return `## 参考图职责\n\n${roleLines}\n\n严格按编号使用参考图；不同参考图发生冲突时，以参考图 1 和用户明确要求为准。\n\n${prompt}`
+  const referencePolicy = referenceMode === "variants"
+    ? "这些参考图是同一商品的并列变体，不以参考图 1 覆盖其他变体。严格保持每个编号对应的颜色、图案、Logo、包装和 SKU，不得串色、融合或互换；参考图 1 只作为 original 比例基准。"
+    : referenceMode === "composition"
+      ? "这些参考图承担彼此独立的主体、构图、细节或风格职责。严格按编号和职责使用，不得擅自融合、替换或改变各自主体身份；只有用户明确要求时才组合对应内容，参考图 1 只作为 original 比例基准。"
+      : "严格按编号使用参考图；不同参考图发生冲突时，以参考图 1 和用户明确要求为准。"
+  return `## 参考图职责\n\n${roleLines}\n\n${referencePolicy}\n\n${prompt}`
 }
 
 async function generateImage(action, input, refreshIndex = 0) {
@@ -1333,6 +1401,9 @@ async function generateImage(action, input, refreshIndex = 0) {
   }
   let body
   if (action === "generate") {
+    if (["image", "reference_images", "reference_image_urls", "reference_image_keys", "reference_roles", "reference_mode"].some((field) => input[field] !== undefined)) {
+      throw new SkillError("INVALID_INPUT", "文生图不能携带参考图参数；需要参考图片时请使用 image transform。", { requestId: currentRequestId })
+    }
     body = {
       request_id: currentRequestId,
       prompt: requireString(input, "prompt", "生图描述"),
@@ -1548,6 +1619,23 @@ function ensureBatchModelAndRatio(task, shared, index) {
   const input = { ...shared, ...task.input }
   const sourceFields = ["image", "reference_images", "reference_image_urls", "reference_image_keys"].filter((field) => input[field] !== undefined)
   if (sourceFields.length > 1) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项只能使用一种参考图来源。`)
+  const references = referenceUrls(input)
+  if (references.length > 6) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项最多支持六张参考图。`)
+  const normalizedReferences = references.map((reference) => normalizeAssetInput(reference, task.request_id))
+  const hasRemoteReferences = normalizedReferences.some((reference) => /^https:\/\//i.test(reference))
+  const hasOwnedReferences = normalizedReferences.some((reference) => !/^https:\/\//i.test(reference))
+  if (hasRemoteReferences && hasOwnedReferences) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项请统一使用本地图片或 HTTPS 图片。`)
+  if (task.action === "generate" && (sourceFields.length || input.reference_roles !== undefined || input.reference_mode !== undefined)) {
+    throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项是文生图，不能携带参考图参数；请改用 transform。`)
+  }
+  if (task.action !== "generate") {
+    try {
+      promptWithReferenceRoles("预检", input, references.length)
+    } catch (error) {
+      if (error instanceof SkillError) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：${error.userHint}`)
+      throw error
+    }
+  }
   const model = batchTaskModel(task, shared)
   if (!IMAGE_MODELS.has(model)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项模型不受支持。`)
   if (task.action === "enhance" && input.resolution !== undefined && !["2k", "4k"].includes(String(input.resolution).toLowerCase())) {
@@ -1559,6 +1647,43 @@ function ensureBatchModelAndRatio(task, shared, index) {
   if (task.action === "expand" && !ratio) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项缺少目标比例。`)
   if (task.action !== "generate" && !batchReferenceField(input)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项缺少参考图。`)
   return IMAGE_MODEL_CREDITS.get(model)
+}
+
+async function validateBatchLocalReferences(task, shared, index, validatedFiles) {
+  const input = { ...shared, ...task.input }
+  for (const rawReference of referenceUrls(input)) {
+    const reference = normalizeAssetInput(rawReference, task.request_id)
+    if (/^https:\/\//i.test(reference) || reference.startsWith("api-upload-temp/")) continue
+    if (/^http:\/\//i.test(reference)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：远程参考图必须使用 HTTPS。`)
+    if (/^data:/i.test(reference)) {
+      const match = reference.match(/^data:([^;,]+);base64,(.+)$/i)
+      if (!match) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：data URL 必须使用 base64 编码。`)
+      const contentType = match[1].toLowerCase()
+      const body = Buffer.from(match[2], "base64")
+      const profile = UPLOAD_PURPOSES.get("image_reference")
+      if (!profile.mimes.has(contentType)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：data URL 图片格式不受支持。`)
+      if (body.length < 1 || body.length > profile.maxBytes) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项参考图不能超过 ${Math.floor(profile.maxBytes / 1024 / 1024)} MB。`)
+      try { validateImageBytes(body, contentType, task.request_id) } catch (error) {
+        if (error instanceof SkillError) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：${error.userHint}`)
+        throw error
+      }
+      continue
+    }
+    const absolutePath = resolve(reference)
+    if (validatedFiles.has(absolutePath)) continue
+    const contentType = mimeType(absolutePath)
+    if (!UPLOAD_PURPOSES.get("image_reference").mimes.has(contentType)) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：本地参考图格式不受支持。`)
+    let fileStat
+    try { fileStat = await stat(absolutePath) } catch { throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项无法读取本地参考图：${absolutePath}`) }
+    if (!fileStat.isFile()) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项不是有效文件：${absolutePath}`)
+    const maximumBytes = UPLOAD_PURPOSES.get("image_reference").maxBytes
+    if (fileStat.size < 1 || fileStat.size > maximumBytes) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项参考图不能超过 ${Math.floor(maximumBytes / 1024 / 1024)} MB。`)
+    try { validateImageBytes(await fileHeader(absolutePath), contentType, task.request_id) } catch (error) {
+      if (error instanceof SkillError) throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项：${error.userHint}`)
+      throw new SkillError("INVALID_INPUT", `批量任务第 ${index + 1} 项无法读取本地参考图：${absolutePath}`)
+    }
+    validatedFiles.add(absolutePath)
+  }
 }
 
 function launchBatchWorker(batchDirectory) {
@@ -1600,14 +1725,16 @@ async function imageBatchSubmit(input) {
   const tasks = input.tasks.map((task, index) => normalizedBatchTask(task, index, defaultAction))
   const ids = new Set()
   const requestIds = new Set()
+  const validatedFiles = new Set()
   let estimatedCredits = 0
-  tasks.forEach((task, index) => {
+  for (const [index, task] of tasks.entries()) {
     if (ids.has(task.id)) throw new SkillError("INVALID_INPUT", `批量任务 id 重复：${task.id}`)
     if (requestIds.has(task.request_id)) throw new SkillError("INVALID_INPUT", `批量任务 request_id 重复：${task.request_id}`)
     ids.add(task.id)
     requestIds.add(task.request_id)
     estimatedCredits += ensureBatchModelAndRatio(task, shared, index)
-  })
+    await validateBatchLocalReferences(task, shared, index, validatedFiles)
+  }
   const concurrency = boundedInteger(input.concurrency, 10, { min: 1, max: 10 })
   const defaultPreviewCount = tasks.length > 50 ? 3 : 0
   const previewCount = boundedInteger(input.preview_count, defaultPreviewCount || 1, { min: 0, max: Math.min(10, tasks.length) })
@@ -2171,7 +2298,7 @@ async function cutout(input, refreshIndex = 0) {
       ...(asset.key ? { image_key: asset.key } : { image: asset.url }),
       type: subjectTypes[subjectType],
       output_mode: backgrounds[background],
-    }, currentRequestId)
+    }, currentRequestId, { retryUncertainFailures: false })
   } catch (error) {
     if (shouldRefreshAsset(error, refreshIndex)) return cutout(input, refreshIndex + 1)
     throw error
@@ -2188,7 +2315,7 @@ async function ocrSubmit(input, refreshIndex = 0) {
   const asset = await materializeInputAsset(input.image, { purpose: "image_ocr", currentRequestId, refreshIndex })
   let payload
   try {
-    payload = await apiRequest("/api/v1/editor/ocr", asset.key ? { image_key: asset.key } : { image: asset.url }, currentRequestId)
+    payload = await apiRequest("/api/v1/editor/ocr", asset.key ? { image_key: asset.key } : { image: asset.url }, currentRequestId, { retryUncertainFailures: false })
   } catch (error) {
     if (shouldRefreshAsset(error, refreshIndex)) return ocrSubmit(input, refreshIndex + 1)
     throw error
@@ -2291,7 +2418,7 @@ async function translateImage(input, refreshIndex = 0) {
   if (filename) body.filename = filename
   let payload
   try {
-    payload = await apiRequest("/api/v1/img/translate-save", body, currentRequestId)
+    payload = await apiRequest("/api/v1/img/translate-save", body, currentRequestId, { retryUncertainFailures: false })
   } catch (error) {
     if (shouldRefreshAsset(error, refreshIndex)) return translateImage(input, refreshIndex + 1)
     throw error
@@ -2506,24 +2633,45 @@ async function run(group, action, input) {
 }
 
 async function main() {
+  let parsed = null
   try {
-    const parsed = await parseArgs(process.argv.slice(2))
+    parsed = await parseArgs(process.argv.slice(2))
     if (parsed.help) return printJson(usage())
     const downloadOptions = prepareDownloadOptions(parsed.input, { group: parsed.group, action: parsed.action })
     const result = await run(parsed.group, parsed.action, parsed.input)
     const namedResult = applySemanticArtifactNames(result, parsed.group, parsed.action, parsed.input)
-    printJson(await materializeArtifacts(namedResult, downloadOptions))
+    const materialized = await materializeArtifacts(namedResult, downloadOptions)
+    printJson(applyProductWorkflowReadiness(materialized, parsed.group, parsed.action))
   } catch (error) {
     const normalized = error instanceof SkillError
       ? error
       : new SkillError("TEMPORARY_UNAVAILABLE", "执行失败，请稍后重试。", { retryable: true })
+    const terminalProductWorkflow = parsed?.group === "product" && parsed?.action === "scrape"
+    const productFailurePolicy = terminalProductWorkflow ? {
+      scope: "current_product_url_workflow",
+      terminal_for_url_workflow: true,
+      automatic_retry: false,
+      allow_browser_fallback: false,
+      allow_downstream_actions: false,
+      unrelated_actions_allowed: true,
+      safe_next_steps: [
+        "retry_original_url_with_user_confirmation",
+        "provide_another_trusted_product_url",
+        "upload_trusted_product_materials",
+      ],
+    } : null
     printJson({
       ok: false,
+      ...(terminalProductWorkflow ? { action: "product.scrape", state: "terminated" } : {}),
       error_type: normalized.errorType,
-      retryable: normalized.retryable,
-      user_hint: normalized.userHint,
+      retryable: terminalProductWorkflow ? false : normalized.retryable,
+      ...(terminalProductWorkflow ? { user_retry_allowed: normalized.retryable, requires_user_confirmation_for_retry: true } : {}),
+      user_hint: terminalProductWorkflow
+        ? "商品采集失败，已终止当前 URL 工作流，尚未开始识图或套图生成。请确认重试原链接、提供另一个可信商品链接，或上传真实商品素材。"
+        : normalized.userHint,
       request_id: normalized.requestId || null,
       code: normalized.code || null,
+      ...(productFailurePolicy ? { failure_policy: productFailurePolicy } : {}),
     })
     process.exitCode = 1
   }

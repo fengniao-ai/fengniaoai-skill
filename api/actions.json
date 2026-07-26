@@ -98,6 +98,34 @@
       "ask_if_missing": {
         "url": "请提供 1688、淘宝/天猫或 Amazon 的完整商品详情页链接。"
       },
+      "failure_policy": {
+        "scope": "current_product_url_workflow",
+        "terminal_for_url_workflow": true,
+        "automatic_retry": false,
+        "allow_browser_fallback": false,
+        "allow_downstream_actions": false,
+        "unrelated_actions_allowed": true,
+        "safe_next_steps": [
+          "retry_original_url_with_user_confirmation",
+          "provide_another_trusted_product_url",
+          "upload_trusted_product_materials"
+        ]
+      },
+      "downstream_gate": {
+        "required": {
+          "data.workflow_ready_for_downstream": true,
+          "workflow.state": "ready",
+          "workflow.allow_downstream_actions": true
+        },
+        "on_blocked": {
+          "scope": "current_product_url_workflow",
+          "automatic_retry": false,
+          "allow_browser_fallback": false,
+          "allow_downstream_actions": false,
+          "unrelated_actions_allowed": true,
+          "requires_user_confirmation_for_retry": true
+        }
+      },
       "reference": "references/product-workflow.md"
     },
     "image.analyze": {
@@ -146,7 +174,7 @@
       "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
       "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品", "白底图", "白底主图", "做成白底", "纯白背景"],
       "required": ["image|reference_images|reference_image_urls", "prompt"],
-      "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
+      "optional": ["aspect_ratio", "model_alias", "customer_id", "reference_roles", "reference_mode", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "aspect_ratio": "original",
         "model_alias": "tpro-1k"
@@ -167,7 +195,7 @@
       "description": "自然补全画面外区域，将图片扩为横版、竖版、方图或指定比例。",
       "triggers": ["扩图", "图片扩图", "扩展图片", "扩成横版", "扩成竖版", "改成16:9", "补全背景", "比例转换"],
       "required": ["image|reference_images|reference_image_urls", "aspect_ratio"],
-      "optional": ["prompt", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
+      "optional": ["prompt", "model_alias", "customer_id", "reference_roles", "reference_mode", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "model_alias": "tpro-1k"
       },
@@ -187,7 +215,7 @@
       "description": "通过生成式高清重绘得到 2K 或 4K 图片，不承诺像素级无损。",
       "triggers": ["变成2K", "变成4K", "2K放大", "4K放大", "图片高清", "高清放大", "高清增强", "高清重绘", "放大到4K", "提升分辨率"],
       "required": ["image|reference_images|reference_image_urls"],
-      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles", "output_dir", "filename_prefix", "download_artifacts"],
+      "optional": ["resolution", "prompt", "aspect_ratio", "model_alias", "customer_id", "reference_roles", "reference_mode", "output_dir", "filename_prefix", "download_artifacts"],
       "defaults": {
         "aspect_ratio": "original"
       },

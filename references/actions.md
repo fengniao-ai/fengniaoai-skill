@@ -38,7 +38,7 @@ CLI 优先从环境变量读取凭证，也支持由 `account configure` 保存�
 
 抠图、OCR、图片翻译、生图参考图和视频翻译都可接受本地路径或 HTTPS URL；图片还兼容 base64 data URL。CLI 会把本地文件直接上传到临时 OSS，不把文件字节或 base64 发送给 B 端 API。
 
-生图可通过 `reference_images` 一次提供 1–6 张有序参考图，并用等长的 `reference_roles` 描述每张职责。并发上传保持原顺序；第 1 张是主体和 `original` 比例基准。多张成图仍是多个独立请求，执行与指定重做规则见 `image-generation.md`。
+生图可通过 `reference_images` 一次提供 1–6 张有序参考图，并用等长的 `reference_roles` 描述每张职责。并发上传保持原顺序，第 1 张作为 `original` 比例基准。同一主体多角度使用 `reference_mode=single_subject`；人物、商品、构图、细节或风格图承担独立职责的通用组合设计使用 `reference_mode=composition`，且必须提供等长职责；多个颜色或 SKU 同框比较使用 `reference_mode=variants`。电商多图的职责同时包含稳定文件 ID，Prompt 按“参考图 N（文件 ID）”引用；默认只传目标颜色/SKU 的身份主图和本张直接相关的零至两张证据图。多张成图仍是多个独立请求，执行与指定重做规则见 `image-generation.md`。
 
 ## 本地素材无感直传
 
@@ -69,7 +69,7 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
 | 商品采集 | 每用户 10 QPS | 单次同步调用；批量最多 3 个在途，新提交不超过 10 次/秒。 |
 | 识图分析 | 每用户 10 QPS | 单次同步调用；批量最多 3 个在途，新提交不超过 10 次/秒。 |
 
-多个 Agent 进程不共享本地并发队列，服务端 `429/30001` 与 CLI 退避重试是最终保护。图片翻译批量调度应同时满足“最多 2 个在途请求”和“每秒不超过 5 次新请求”；如果多个 Agent 共用同一账号，仍以服务端 5 QPS 为总上限。批量任务执行前应说明将产生的操作数量并确认点数；批量中的每个付费图片任务使用独立业务 `request_id`，同一任务的网络重试才复用原值。
+多个 Agent 进程不共享本地并发队列，服务端 `429/30001` 与 CLI 退避是最终保护。图片翻译批量调度应同时满足“最多 2 个在途请求”和“每秒不超过 5 次新请求”；如果多个 Agent 共用同一账号，仍以服务端 5 QPS 为总上限。批量任务执行前应说明将产生的操作数量并确认点数；批量中的每个付费图片任务使用独立业务 `request_id`。只有生图和视频翻译创建具备明确业务幂等，允许相同任务在不确定网络失败时复用原 ID；抠图、OCR 创建、图片翻译、识图和商品采集不能因超时、断网或 5xx 自动重发，只允许对 `429/30001/2061/2065` 这类明确未进入业务执行的协议拒绝按原请求安全退避。OSS 临时上传仍按上传协议安全重试。
 
 电商套图的滑动队列先启动最多 10 张；任一任务成功或不可重试地失败后释放工作槽，并按原任务顺序补入下一张。遇到服务端 `429/30001` 时，该任务仍占用原槽位并复用原 `request_id`：优先等待服务端 `Retry-After`，否则由 CLI 默认约 1 秒、2 秒退避，默认总共尝试 3 次。重试后仍被限流时，暂停新增提交并返回 `RATE_LIMITED`，保留未开始任务和当前任务参数；不要无限重试，也不要换新 `request_id`。普通恢复只继续未完成任务，不重复提交成功图片；只有用户明确要求重做并确认额外点数后，才通过 `batch-retry task_ids` 重新生成指定成功项。
 
@@ -113,7 +113,9 @@ Agent 只向用户索取本地图片或视频，不要求用户先上传到网�
 }
 ```
 
-失败输出统一包含 `ok=false`、`error_type`、`retryable`、`user_hint` 和 `request_id`。
+失败输出统一包含 `ok=false`、`error_type`、`retryable`、`user_hint` 和 `request_id`。商品采集失败额外返回 `action=product.scrape`、`state=terminated` 和 `failure_policy`；此时 `retryable=false` 表示 Agent 不得自动重试，`user_retry_allowed` 只表示用户确认后可以发起新请求。`failure_policy` 明确禁止浏览器降级和下游 action，并给出安全下一步。
+
+商品采集 API 成功后还会返回 `data.workflow_ready_for_downstream` 和 `workflow`。只有本次 `product.json` 与至少一张主图都成功落盘时，`workflow.state=ready`；否则为 `blocked` 且 `allow_downstream_actions=false`。API 成功只说明采集操作已经完成并可能扣点，不能覆盖本地前置素材不完整的阻断状态。
 
 ## 自动下载产物
 
