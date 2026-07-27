@@ -231,7 +231,7 @@
       "label": "创建批量生图任务",
       "skill": "fengniao-image-generate",
       "status": "active",
-      "description": "为共享参考图的多张套图或 11 到 1000 张普通生图任务建立可恢复清单，先返回预计点数，不立即生成。",
+      "description": "为 2 张起的共享商品参考图套图或 11 到 1000 张普通生图任务建立可恢复清单，先返回预计点数，不立即生成；电商套图不得用临时 Shell 脚本替代。",
       "triggers": ["批量生图", "批量生成图片", "批量改图", "批量参考图改图", "批量白底图", "批量电商主图", "生成很多张", "几百张生图"],
       "required": ["tasks"],
       "optional": ["action", "shared", "concurrency", "preview_count", "output_dir", "download_artifacts"],

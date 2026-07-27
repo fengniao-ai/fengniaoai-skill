@@ -46,7 +46,7 @@
 
 ## 大批量与中断恢复
 
-共享同一组商品参考图的电商套图从 2 张起优先使用 `image batch-submit`；普通独立任务超过 10 张时必须使用。输入由可复用的 `shared` 和最多 1000 个 `tasks` 组成；每个 task 可设置 `id`、`action` 以及该任务自己的 Prompt、比例、模型或参考图。`shared` 适合放整批相同的参考图、参考职责、模型和通用参数。
+共享同一组商品参考图的电商套图从 2 张起必须使用 `image batch-submit`；普通独立任务超过 10 张时必须使用。不能用临时 Shell 脚本、循环调用或多个并行单图命令替代。输入由可复用的 `shared` 和最多 1000 个 `tasks` 组成；每个 task 可设置 `id`、`action` 以及该任务自己的 Prompt、比例、模型或参考图。`shared` 适合放整批相同的参考图、参考职责、模型和通用参数。
 
 `batch-submit` 创建 `manifest.json` 后返回 `awaiting_start_confirmation`、预计点数和绝对 `batch_dir`，不会立即请求付费接口。确认后使用：
 
@@ -61,5 +61,7 @@ node scripts/fengniaoai.mjs image batch-resume --input-json '{"batch_dir":"/abso
 ```
 
 状态、暂停、取消和失败项重试分别使用 `batch-status`、`batch-pause`、`batch-cancel`、`batch-retry`。`batch-resume` 默认前台运行；只有明确支持长驻进程的平台才传 `background=true`。状态始终逐张保存，进程中断后可再次 resume。完整并发与限流策略见 `references/actions.md`。
+
+批量生成状态与视觉读取状态相互独立。manifest 已完成并且产物落盘即表示对应生成任务成功，不能等待视觉工具才补入后续任务。图片工具同时具备单次超时、取消和终态回收时最多并行检查 2 张；缺少其中任一能力时不自动调用视觉读取，先交付批次汇总和结果目录并标记“等待商家确认”。用户交付后明确要求 AI 检查时才一次检查 1 张。读取失败或不可用不能阻塞生成队列、结果交付或批次恢复。
 
 新对话不知道 `batch_dir` 时先调用 `image batch-list`，默认返回最近 20 个批次的状态、汇总和结果目录，再选择目标批次查询或继续；不要让用户去文件系统手工寻找。若三张样图全部失败，批次进入 `preview_failed`，不能用 `approve_preview` 强行继续，应先处理失败原因或重建批次。

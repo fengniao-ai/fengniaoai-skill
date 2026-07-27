@@ -1,6 +1,6 @@
 {
   "name": "fengniaoai-skill",
-  "version": "1.4.0",
+  "version": "1.4.2",
   "author": "fengniaoai",
   "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译，并支持商品资料采集与识图分析。",
   "license": "Apache-2.0",
@@ -98,6 +98,15 @@
       "生成电商套图",
       "商品主图",
       "Listing套图",
+      "Amazon套图",
+      "Amazon A+",
+      "亚马逊A+",
+      "OZON套图",
+      "OZON商品图",
+      "俄罗斯电商图",
+      "淘宝详情页",
+      "天猫详情页",
+      "详情页设计",
       "采集商品信息",
       "解析商品链接",
       "下载1688商品",
@@ -146,7 +155,7 @@
     },
     "fengniao-ecommerce-kit": {
       "entry": "skills/fengniao-ecommerce-kit/SKILL.md",
-      "description": "商品一致性控制、多用途主图和多渠道电商套图。",
+      "description": "商品一致性控制、Amazon Listing 与 A+、OZON 商品图、淘宝/天猫主图和模块化详情页，以及多渠道电商套图。",
       "status": "active"
     },
     "fengniao-product-insight": {
