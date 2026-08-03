@@ -1,8 +1,8 @@
 {
   "name": "fengniaoai-skill",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "author": "fengniaoai",
-  "description": "蜂鸟AI 生图，0 门槛一站式完成生成、编辑、设计，覆盖通用、修图、电商、社媒、营销；同时提供 AI 翻译，支持图片、视频 30+ 语言一键互译，并支持商品资料采集与识图分析。",
+  "description": "蜂鸟AI 是专注于电商、内容营销领域的 Agent 平台，通过 AI 翻译（图片翻译、视频翻译）、AI 图片（AI 生图、AI 修图）、AI 视频三大核心能力，帮助企业低成本、高质量、规模化打造商品 Listing、社媒内容、广告投放素材等全链路营销内容，实现“一个商品卖全球”。“0 门槛 1 站式，秒生爆款卖全球”，日处理客户需求近百万次，服务 20+ 行业平台级客户，支持 API 等多种交付方式。",
   "license": "Apache-2.0",
   "entry": "SKILL.md",
   "homepage": "https://fengniaoai.com/",
@@ -50,6 +50,28 @@
       "蜂鸟翻译",
       "蜂鸟AI设计",
       "蜂鸟设计",
+      "蜂鸟图片翻译",
+      "蜂鸟AI图片翻译",
+      "蜂鸟视频翻译",
+      "蜂鸟AI视频翻译",
+      "蜂鸟AI生图",
+      "蜂鸟生图",
+      "蜂鸟改图",
+      "蜂鸟换背景",
+      "蜂鸟白底图",
+      "蜂鸟扩图",
+      "蜂鸟高清放大",
+      "蜂鸟抠图",
+      "蜂鸟OCR",
+      "蜂鸟识图",
+      "蜂鸟商品分析",
+      "蜂鸟采集商品",
+      "蜂鸟下载商品",
+      "蜂鸟电商套图",
+      "蜂鸟亚马逊套图",
+      "蜂鸟Amazon套图",
+      "蜂鸟OZON套图",
+      "蜂鸟淘宝套图",
       "生图",
       "生成图片",
       "生成海报",
@@ -130,38 +152,6 @@
       "type": "string",
       "description": "蜂鸟AI Api key。仅粘贴到可信私有 Agent 对话，由 Skill 安全保存；也可预先设置环境变量。",
       "required": false
-    }
-  },
-  "skills": {
-    "fengniao-image-generate": {
-      "entry": "skills/fengniao-image-generate/SKILL.md",
-      "description": "文生图、参考图改图、白底图、扩图、2K/4K 生成式高清增强和可恢复的大批量任务。",
-      "status": "active"
-    },
-    "fengniao-image-tools": {
-      "entry": "skills/fengniao-image-tools/SKILL.md",
-      "description": "用户明确要求时执行抠图或去背景，并支持 OCR 与文字坐标识别。",
-      "status": "active"
-    },
-    "fengniao-image-translate": {
-      "entry": "skills/fengniao-image-translate/SKILL.md",
-      "description": "图片文字翻译、语言映射和商品文字保护。",
-      "status": "active"
-    },
-    "fengniao-video-translate": {
-      "entry": "skills/fengniao-video-translate/SKILL.md",
-      "description": "视频字幕翻译、擦字幕、AI 配音和原声克隆。",
-      "status": "active"
-    },
-    "fengniao-ecommerce-kit": {
-      "entry": "skills/fengniao-ecommerce-kit/SKILL.md",
-      "description": "商品一致性控制、Amazon Listing 与 A+、OZON 商品图、淘宝/天猫主图和模块化详情页，以及多渠道电商套图。",
-      "status": "active"
-    },
-    "fengniao-product-insight": {
-      "entry": "skills/fengniao-product-insight/SKILL.md",
-      "description": "采集 1688、淘宝/天猫和 Amazon 商品资料与图片，并分析商品图、详情长图或界面截图。",
-      "status": "active"
     }
   }
 }

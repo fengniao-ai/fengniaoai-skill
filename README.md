@@ -1,6 +1,10 @@
 # fengniaoai-skill
 
-面向通用 AI Agent 的蜂鸟AI翻译与生图技能包。用自然语言完成图片、视频翻译，图片生成、编辑、电商设计，以及商品资料采集与识图分析；无需让用户理解模型或 API 参数。
+蜂鸟AI是专注于电商、内容营销领域的Agent平台，通过AI翻译（图片翻译、视频翻译）、AI图片（AI生图、AI修图）、AI视频三大核心能力，帮助企业低成本、高质量、规模化打造商品Listing、社媒内容、广告投放素材等全链路营销内容，实现“一个商品卖全球”。
+
+“0 门槛 1 站式，秒生爆款卖全球”，日处理客户需求近百万次，服务20+行业平台级客户，支持API等多种交付方式。
+
+本开源 Skill 面向通用 AI Agent，当前接入图片与视频翻译、AI 生图与修图、电商套图、商品资料采集和识图分析；用户可以直接用自然语言完成任务，无需理解模型或 API 参数。
 
 [蜂鸟AI官网](https://fengniaoai.com/) · [使用文档](https://github.com/fengniao-ai/fengniaoai-skill#readme) · [问题反馈](https://github.com/fengniao-ai/fengniaoai-skill/issues) · [获取 Project ID 与 Api key](https://fengniaoai.com/userCenter/key) · [Apache-2.0 License](./LICENSE.txt)
 
@@ -93,7 +97,9 @@ npx -y skills update fengniaoai-skill -p -y
 
 升级完成后，重新打开 Agent 客户端或开始新对话以加载新版说明。蜂鸟AI凭证保存在用户配置目录中，不会被升级覆盖。
 
-这是一个根 Skill 入口和 6 个内置子 Skill 组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译、商品资料与识图、电商套图会随根 Skill 一起安装，并由 Agent 按任务自动路由，不需要使用 `--full-depth` 分别安装。
+这是一个公开 Skill 入口和 6 个内部工作流组成的完整技能包。用户只需安装 `fengniaoai-skill`；图片生成、图片工具、图片翻译、视频翻译、商品资料与识图、电商套图都由蜂鸟AI根入口按任务自动路由。Agent 的 Skill 列表中只应出现一个“蜂鸟AI”，用户不需要记忆或安装内部工作流名称。
+
+从 `1.4.x` 或更早版本升级时，如果客户端仍显示多个旧子条目，说明安装目录残留了旧版 `skills/*/SKILL.md`。请先通过该 Agent 平台的 Skill 管理功能移除旧安装，再从 GitHub 干净安装 `1.5.0` 或更高版本，并重新打开客户端或开始新对话。不同平台的卸载命令并不统一，因此不要直接删除不确定的用户目录。
 
 兼容性边界：本项目采用 `SKILL.md`、相对路径资源和本地 CLI 的通用 Agent Skills 结构，并提供 `agents/openai.yaml` 与 `claw.json`。支持 Agent Skills、允许执行本地命令、读写任务文件且能访问 HTTPS 网络的 Agent 客户端可以直接安装使用。不同 Agent 平台尚未统一清单格式和权限模型，因此不承诺所有纯聊天或禁止 shell、文件系统、网络访问的平台零适配运行。
 
@@ -153,33 +159,34 @@ Agent 会优先展示本地文件。如果某个产物下载失败，已完成�
 
 可以通过任务输入或环境变量关闭自动下载、指定输出目录和调整单文件大小限制。详细说明见 [`references/actions.md`](./references/actions.md)。
 
-## Included Skills
+## 内部工作流
 
-| Skill | 用途 |
+| 工作流 | 用途 |
 | --- | --- |
-| `fengniaoai-skill` | 根入口、自然语言路由、账号配置与点数查询 |
-| `fengniao-image-generate` | 文生图、参考图改图、白底图、扩图、2K/4K 高清增强 |
-| `fengniao-image-tools` | 用户明确要求时执行抠图/去背景，以及 OCR 与文字坐标识别 |
-| `fengniao-image-translate` | 图片翻译、语言与引擎选择、商品文字保护 |
-| `fengniao-video-translate` | 视频字幕翻译、擦字幕、AI 配音与原声克隆 |
-| `fengniao-ecommerce-kit` | 商品一致性控制和多渠道电商套图工作流 |
-| `fengniao-product-insight` | 1688、淘宝/天猫、Amazon 商品采集下载与识图分析 |
+| 图片生成 | 文生图、参考图改图、白底图、扩图、2K/4K 高清增强 |
+| 图片工具 | 用户明确要求时执行抠图/去背景，以及 OCR 与文字坐标识别 |
+| 图片翻译 | 图片翻译、语言与引擎选择、商品文字保护 |
+| 视频翻译 | 视频字幕翻译、擦字幕、AI 配音与原声克隆 |
+| 电商套图 | 商品一致性控制和多渠道电商套图编排 |
+| 商品资料与识图 | 1688、淘宝/天猫、Amazon 商品采集下载与识图分析 |
+
+这些文件位于 `references/workflows/`，只供根 Skill 按需读取，不是可独立调用或安装的 Skill。
 
 ## Repository Structure
 
 ```text
 fengniaoai-skill/
-├── SKILL.md                  # 根 Skill 与对话路由
+├── SKILL.md                  # 唯一公开 Skill 与自然语言路由
 ├── agents/openai.yaml        # Codex/OpenAI 客户端展示信息
 ├── api/actions.json          # 机器可读动作定义
 ├── claw.json                 # OpenClaw 兼容清单
 ├── scripts/fengniaoai.mjs    # 统一 API、轮询、下载与错误处理
-├── skills/                   # 6 个子 Skill
+├── references/workflows/     # 6 个按需读取的内部工作流
 ├── references/               # 语言、音色、接口与电商视觉知识
 └── test/                     # 离线契约测试
 ```
 
-接口调用、轮询、错误归一化和产物下载集中在一个 CLI 中，子 Skill 只负责理解用户目标、补齐必要信息并选择正确动作。
+接口调用、轮询、错误归一化和产物下载集中在一个 CLI 中。唯一公开的蜂鸟AI Skill 负责理解用户目标并加载相关内部工作流；公共账号、上传、点数、批量、错误和交付规则始终由根入口统一约束。
 
 ## 开发与验证
 

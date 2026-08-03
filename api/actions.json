@@ -27,6 +27,59 @@
     "skip_roles": ["source"],
     "reference": "references/actions.md"
   },
+  "workflows": {
+    "product-insight": {
+      "file": "references/workflows/product-insight.md",
+      "description": "商品链接采集、商品资料下载、商品图与界面识图分析。",
+      "actions": ["product.scrape", "image.analyze"]
+    },
+    "image-generate": {
+      "file": "references/workflows/image-generate.md",
+      "description": "文生图、参考图改图、白底图、扩图、高清增强和持久化批量生成。",
+      "actions": [
+        "image.generate",
+        "image.transform",
+        "image.expand",
+        "image.enhance",
+        "image.batch-submit",
+        "image.batch-list",
+        "image.batch-status",
+        "image.batch-resume",
+        "image.batch-pause",
+        "image.batch-retry",
+        "image.batch-cancel"
+      ]
+    },
+    "image-tools": {
+      "file": "references/workflows/image-tools.md",
+      "description": "明确抠图或去背景，以及 OCR 与文字坐标识别。",
+      "actions": ["image.cutout", "image.ocr-submit", "image.ocr-status", "image.ocr"]
+    },
+    "image-translate": {
+      "file": "references/workflows/image-translate.md",
+      "description": "图片文字翻译、语言映射和商品文字保护。",
+      "actions": ["image.translate"]
+    },
+    "video-translate": {
+      "file": "references/workflows/video-translate.md",
+      "description": "视频字幕翻译、擦字幕、AI 配音、原声克隆和进度查询。",
+      "actions": ["video.translate-submit", "video.translate-status", "video.translate"]
+    },
+    "ecommerce-kit": {
+      "file": "references/workflows/ecommerce-kit.md",
+      "description": "组合商品采集、识图和生图 action，完成多渠道电商套图。",
+      "actions": [],
+      "uses_actions": [
+        "product.scrape",
+        "image.analyze",
+        "image.transform",
+        "image.batch-submit",
+        "image.batch-status",
+        "image.batch-resume",
+        "image.translate"
+      ]
+    }
+  },
   "actions": {
     "account.configure": {
       "label": "配置蜂鸟AI",
@@ -82,7 +135,7 @@
     },
     "product.scrape": {
       "label": "采集商品资料与图片",
-      "skill": "fengniao-product-insight",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "从 1688、淘宝/天猫或 Amazon 商品详情页采集结构化资料，并将完整 product.json 和主图、SKU 图、详情图分目录下载到本地；用户要求分析 URL 商品时，后续必须联合 product.json 与图片证据生成 analysis/product-analysis.md。",
       "triggers": ["采集商品信息", "解析商品链接", "分析商品链接", "下载1688商品", "获取1688商品", "下载商品图片", "读取淘宝商品", "读取Amazon商品"],
@@ -130,7 +183,7 @@
     },
     "image.analyze": {
       "label": "识图分析",
-      "skill": "fengniao-product-insight",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "分析商品图、详情长图或界面截图的可见内容，并将自然语言分析保存为本地 Markdown；分析 URL 商品或在套图流程中选择分析后规划时，完整读取 product.json，对全部去重主图逐张调用，并联合页面字段与图片证据生成 analysis/product-analysis.md。",
       "triggers": ["分析图片", "识图分析", "分析商品图", "分析详情页", "分析截图", "看看图片里有什么", "提取商品视觉信息"],
@@ -149,7 +202,7 @@
     },
     "image.generate": {
       "label": "从零生成图片",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "根据文字描述从零生成海报、封面、商品场景图或创意视觉。",
       "triggers": ["生成图片", "生成一张图", "文生图", "做一张海报", "生成海报", "生成封面", "生成商品图", "商品场景图", "营销图"],
@@ -169,7 +222,7 @@
     },
     "image.transform": {
       "label": "参考图改图",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "参考现有图片换背景、换场景、改风格，并尽量保持指定人物、商品或构图。",
       "triggers": ["修改图片", "编辑图片", "参考这张图", "照这张图改", "换背景", "换场景", "改风格", "保持商品", "白底图", "白底主图", "做成白底", "纯白背景"],
@@ -190,7 +243,7 @@
     },
     "image.expand": {
       "label": "扩图与比例转换",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "自然补全画面外区域，将图片扩为横版、竖版、方图或指定比例。",
       "triggers": ["扩图", "图片扩图", "扩展图片", "扩成横版", "扩成竖版", "改成16:9", "补全背景", "比例转换"],
@@ -210,7 +263,7 @@
     },
     "image.enhance": {
       "label": "2K/4K 高清增强",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "通过生成式高清重绘得到 2K 或 4K 图片，不承诺像素级无损。",
       "triggers": ["变成2K", "变成4K", "2K放大", "4K放大", "图片高清", "高清放大", "高清增强", "高清重绘", "放大到4K", "提升分辨率"],
@@ -229,7 +282,7 @@
     },
     "image.batch-submit": {
       "label": "创建批量生图任务",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "为 2 张起的共享商品参考图套图或 11 到 1000 张普通生图任务建立可恢复清单，先返回预计点数，不立即生成；电商套图不得用临时 Shell 脚本替代。",
       "triggers": ["批量生图", "批量生成图片", "批量改图", "批量参考图改图", "批量白底图", "批量电商主图", "生成很多张", "几百张生图"],
@@ -248,7 +301,7 @@
     },
     "image.batch-list": {
       "label": "查看最近生图批次",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "从用户级批次索引列出最近的批量生图任务，使新对话也能找回进度和结果。",
       "triggers": ["最近的生图批次", "查看上次生图任务", "找回批量生图", "继续上次批量生图"],
@@ -263,7 +316,7 @@
     },
     "image.batch-status": {
       "label": "查询批量生图进度",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "查询批次完成数、处理中、等待、失败和最近结果；默认不返回完整大清单。",
       "triggers": ["批量生图进度", "生图生成到哪了", "查看生图批次", "生图批次还有多少张"],
@@ -278,7 +331,7 @@
     },
     "image.batch-resume": {
       "label": "确认或恢复批量生图",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "用户确认预计点数、确认样图、充值到账或中断恢复后继续同一批次。",
       "triggers": ["确认开始批量", "样图可以继续", "继续批次", "恢复批量任务", "充值好了继续"],
@@ -293,7 +346,7 @@
     },
     "image.batch-pause": {
       "label": "暂停批量生图",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "停止补入新任务，允许正在生成的图片正常完成并保存。",
       "triggers": ["暂停批量", "先停一下", "停止继续生成"],
@@ -308,7 +361,7 @@
     },
     "image.batch-retry": {
       "label": "重试或重做批量图片",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "默认选择可重试的失败任务；显式 task_ids 可重做失败或已完成图片。先计算额外点数并确认，再以新 request ID 排队，重做结果保存为 v2 且不覆盖旧图。",
       "triggers": ["重试失败图片", "重做失败项", "重做这张图", "重新生成这张", "批量失败重试"],
@@ -323,7 +376,7 @@
     },
     "image.batch-cancel": {
       "label": "取消批量生图",
-      "skill": "fengniao-image-generate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "取消尚未开始的任务，正在生成的图片仍会正常收口。",
       "triggers": ["取消批量", "取消剩余图片", "不继续生成了"],
@@ -338,7 +391,7 @@
     },
     "image.cutout": {
       "label": "智能抠图",
-      "skill": "fengniao-image-tools",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "仅在用户明确要求抠图、去背景、移除背景或抠出主体时，识别主体并输出用户指定的透明底、白底或主体裁切结果。",
       "triggers": ["抠图", "图片抠图", "抠出商品", "抠出主体", "去背景", "移除背景"],
@@ -358,7 +411,7 @@
     },
     "image.ocr-submit": {
       "label": "创建文字坐标识别任务",
-      "skill": "fengniao-image-tools",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "创建图片文字与坐标识别任务，不等待任务完成。",
       "triggers": ["创建OCR任务", "异步识别文字", "提交文字坐标识别"],
@@ -375,7 +428,7 @@
     },
     "image.ocr-status": {
       "label": "查询文字坐标识别任务",
-      "skill": "fengniao-image-tools",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "根据任务 ID 查询 OCR 识别状态和结果。",
       "triggers": ["查询OCR任务", "OCR进度", "继续文字识别任务"],
@@ -392,7 +445,7 @@
     },
     "image.ocr": {
       "label": "识别图片文字和坐标",
-      "skill": "fengniao-image-tools",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "创建并等待图片文字与坐标识别完成。",
       "triggers": ["识别图片文字", "文字坐标识别", "提取文字位置", "OCR", "找出文字坐标"],
@@ -409,7 +462,7 @@
     },
     "image.translate": {
       "label": "图片翻译",
-      "skill": "fengniao-image-translate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "识别并翻译图片文字，生成尽量保留原版式的译文图片，同时保存历史记录并返回精修标识。",
       "triggers": ["图片翻译", "翻译图片", "翻译海报", "把图片翻成英文", "翻译商品图", "识别后翻译"],
@@ -430,7 +483,7 @@
     },
     "video.translate-submit": {
       "label": "创建视频翻译任务",
-      "skill": "fengniao-video-translate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "创建单个或批量视频翻译任务，不等待任务完成。",
       "triggers": ["创建视频翻译任务", "批量视频翻译", "提交视频翻译"],
@@ -450,7 +503,7 @@
     },
     "video.translate-status": {
       "label": "查询视频翻译任务",
-      "skill": "fengniao-video-translate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "根据任务 ID、任务 ID 列表或批次 ID 查询视频翻译进度和附件。",
       "triggers": ["视频翻译进度", "查询视频翻译", "继续视频翻译任务"],
@@ -467,7 +520,7 @@
     },
     "video.translate": {
       "label": "视频翻译并等待结果",
-      "skill": "fengniao-video-translate",
+      "skill": "fengniaoai-skill",
       "status": "active",
       "description": "创建一个视频翻译任务并持续查询，支持字幕翻译、擦字幕、AI 配音和原声克隆。",
       "triggers": ["视频翻译", "翻译视频", "翻译这个视频", "视频字幕翻译", "擦掉原字幕", "生成双语字幕", "视频AI配音", "克隆原声"],

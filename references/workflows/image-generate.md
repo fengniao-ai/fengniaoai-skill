@@ -1,15 +1,6 @@
----
-name: fengniao-image-generate
-description: >-
-  蜂鸟AI 生图的生成与设计能力。0 门槛用一句话生成图片，也可以参考现有图片换背景、制作白底图、
-  换场景、改风格、保持人物或商品主体，扩展画面和转换横竖比例，并生成 2K/4K
-  高清版本。当用户说“帮我生成一张图”“照这张图改一下”“把背景换成…”
-  “扩成 16:9”“做成高清/2K/4K”，或需要海报、封面、商品场景图时使用。
----
-
 # 蜂鸟AI 图片生成
 
-使用共享 CLI `../../scripts/fengniaoai.mjs`。所有 action 都调用 `/api/v1/img/generate`。
+使用共享 CLI `scripts/fengniaoai.mjs`。所有 action 都调用 `/api/v1/img/generate`。
 
 ## 选择 action
 
@@ -76,15 +67,15 @@ description: >-
 
 `batch-resume` 默认前台运行，适配会回收子进程的通用 Agent。只有当前平台明确支持长驻后台进程时才传 `background=true`；后台意外中断时继续同一 `batch_dir`，不能新建批次。
 
-选择模型、比例或处理参考图与重试前，读取 `../../references/image-generation.md`。
+选择模型、比例或处理参考图与重试前，读取 `references/image-generation.md`。
 
 ## 执行
 
 ```bash
-node ../../scripts/fengniaoai.mjs image generate --input-json '{"prompt":"A clean product hero image","aspect_ratio":"1:1"}'
-node ../../scripts/fengniaoai.mjs image transform --input-json '{"image":"https://example.com/product.jpg","prompt":"Place the product in a clean studio scene"}'
-node ../../scripts/fengniaoai.mjs image expand --input-json '{"image":"https://example.com/product.jpg","aspect_ratio":"16:9"}'
-node ../../scripts/fengniaoai.mjs image enhance --input-json '{"image":"https://example.com/product.jpg","resolution":"4k"}'
+node scripts/fengniaoai.mjs image generate --input-json '{"prompt":"A clean product hero image","aspect_ratio":"1:1"}'
+node scripts/fengniaoai.mjs image transform --input-json '{"image":"https://example.com/product.jpg","prompt":"Place the product in a clean studio scene"}'
+node scripts/fengniaoai.mjs image expand --input-json '{"image":"https://example.com/product.jpg","aspect_ratio":"16:9"}'
+node scripts/fengniaoai.mjs image enhance --input-json '{"image":"https://example.com/product.jpg","resolution":"4k"}'
 ```
 
 ## 交付

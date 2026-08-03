@@ -1,12 +1,3 @@
----
-name: fengniao-image-translate
-description: >-
-  蜂鸟AI翻译的图片翻译能力，30+ 语言一键互译。识别图片里的文字，翻译成目标语言，并尽量保留原图版式生成
-  可直接使用的翻译图；保存翻译历史并返回后续精修需要的任务与图片标识，按需保护商品文字、品牌名或术语。
-  当用户说“把这张图翻译成英文/日文…”“翻译海报、菜单、截图或商品图”
-  “识别语言后翻译”“不要翻译品牌名/商品文字”时使用。
----
-
 # 蜂鸟AI 图片翻译
 
 ## 最简引导
@@ -30,16 +21,16 @@ description: >-
 - 有原始文件名时传 `filename`，便于后续精修编辑器恢复下载文件名；本地路径和 URL 会由 CLI 自动推断文件名。
 - 默认不返回原文、译文区域或原始 OCR 数据；新接口只交付翻译图、擦字底图和历史精修标识。用户另行需要文字与坐标时再调用 OCR。
 
-执行前读取 `../../references/image-translation.md`，把用户说的语言名称映射为其中的图片翻译代码。不要拿视频语言代码代替，也不要要求普通用户提供 API 代码。
+执行前读取 `references/image-translation.md`，把用户说的语言名称映射为其中的图片翻译代码。不要拿视频语言代码代替，也不要要求普通用户提供 API 代码。
 
 ## 执行
 
 ```bash
-node ../../scripts/fengniaoai.mjs image translate --input-json '{"image":"https://example.com/product.jpg","lang_from":"zh","lang_to":"en","commodity_protection":false}'
+node scripts/fengniaoai.mjs image translate --input-json '{"image":"https://example.com/product.jpg","lang_from":"zh","lang_to":"en","commodity_protection":false}'
 ```
 
 展示翻译后的图片，并保留返回的 `task_id` 和 `image_id` 供后续精修。默认交付只需说明处理完成、结果图片和必要的点数或任务信息；不要主动评价翻译质量、逐条挑错、改写译文或声称结果已经通过人工验收。只有用户明确要求审校、对照原文或分析翻译问题时，才进行相应检查。
 
 用户一次提供多张图片时，先确认图片数量和点数，再以最多 2 张并发执行；新请求启动间隔至少约 220ms，确保每秒不超过 5 次 `translate-save` 请求。每张使用独立 `request_id`，不要把“5 QPS”误解为一次请求可以翻译 5 张图片，也不要按生图接口的 20 QPS 执行图片翻译。
 
-新接口不返回文字区域；需要原文、译文或文字坐标时，将图片另行路由到 `fengniao-image-tools` 的 OCR 能力。
+新接口不返回文字区域；需要原文、译文或文字坐标时，将图片另行路由到图片工具工作流的 OCR 能力。

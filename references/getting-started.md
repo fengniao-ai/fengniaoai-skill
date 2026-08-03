@@ -22,7 +22,7 @@ npx -y skills add ./fengniaoai-skill --skill fengniaoai-skill -g -a codex
 npx -y skills add https://github.com/fengniao-ai/fengniaoai-skill --skill fengniaoai-skill -g
 ```
 
-`fengniaoai-skill` 是唯一安装入口。5 个子 Skill、共享 CLI、接口定义和参考资料都会随根 Skill 一起安装，并由根 Skill 按用户意图加载；不要使用 `--full-depth` 把子 Skill 当成互相独立的软件包安装。
+`fengniaoai-skill` 是唯一安装和调用入口。6 个内部工作流、共享 CLI、接口定义和参考资料都会随根 Skill 一起安装，并由根 Skill 按用户意图加载；内部工作流不是独立 Skill，不需要额外安装或记忆名称。
 
 “通用”指采用主流 `SKILL.md` 目录结构，并可由标准 `skills` CLI 安装到其支持的 Agent 客户端。实际运行仍要求客户端能够执行 Node.js 18+ 本地命令、读写任务文件并访问 HTTPS 网络；纯聊天、无 shell 或禁用文件系统/网络权限的平台不能直接执行本 Skill。
 
