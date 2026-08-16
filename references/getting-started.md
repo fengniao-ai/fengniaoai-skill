@@ -59,7 +59,7 @@ node scripts/fengniaoai.mjs account configure --input-stdin
 
 5. Agent 调用 `account balance` 验证连接，成功后继续原任务。
 
-配置命令将凭证保存到用户级配置文件，不写入仓库、Skill 目录或 shell profile；目录权限为 `0700`，文件权限为 `0600`。环境变量 `FENGNIAO_PROJECT_ID`、`FENGNIAO_API_KEY` 仍适用于服务器与 CI，并优先于配置文件。
+配置命令将凭证保存到用户级配置文件，不写入仓库、Skill 目录或 shell profile；目录权限为 `0700`，文件权限为 `0600`。环境变量 `FENGNIAO_PROJECT_ID`、`FENGNIAO_API_KEY` 仍适用于服务器与 CI，并优先于配置文件。余额接口按 Project 自身关联的账户查询。
 
 只允许在用户信任的私有 Agent 对话中粘贴配置。Agent 不得复述或展示密钥；如果运行环境无法安全地把内容传给标准输入，应改用平台的 Secret/环境变量设置。
 

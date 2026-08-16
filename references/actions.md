@@ -12,8 +12,8 @@ CLI 优先从环境变量读取凭证，也支持由 `account configure` 保存�
 
 | Group | Action | 必填输入 | 用途 |
 | --- | --- | --- | --- |
-| `account` | `configure` | Key 页面复制的两行配置，通过 `--input-stdin` 输入 | 安全保存 Project ID 与 Api key，不回显凭证。 |
-| `account` | `balance` | 无 | 查询剩余油包/点数；`channel` 默认 `fengn`，可选 `uid`。 |
+| `account` | `configure` | Key 页面复制的 Project ID 与 Api key，通过 `--input-stdin` 输入 | 安全保存凭证，不回显内容。 |
+| `account` | `balance` | 无 | 按已鉴权 Project 查询剩余油包/点数。 |
 | `product` | `scrape` | `url` | 采集 1688、淘宝/天猫或 Amazon 商品资料，保存 JSON 并分组下载图片。 |
 | `image` | `analyze` | 本地 `image` | 上传并分析商品图、详情长图或界面截图，保存分析 Markdown。 |
 | `image` | `generate` | `prompt` | 文生图。 |

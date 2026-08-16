@@ -314,7 +314,7 @@ async function credentials() {
   }
   throw new SkillError(
     "CREDENTIALS_MISSING",
-    `尚未连接蜂鸟AI。请先在 ${LOGIN_URL} 登录或注册，再到 ${KEY_URL} 点击“复制给 Agent”，将复制的两行配置粘贴到可信的私有对话中。`,
+    `尚未连接蜂鸟AI。请先在 ${LOGIN_URL} 登录或注册，再到 ${KEY_URL} 点击“复制给 Agent”，将复制的配置粘贴到可信的私有对话中。`,
   )
 }
 
@@ -331,7 +331,7 @@ function pastedCredential(input, envName, aliases = []) {
 async function accountConfigure(input) {
   const projectId = pastedCredential(input, "FENGNIAO_PROJECT_ID", ["project_id"])
   const apiKey = pastedCredential(input, "FENGNIAO_API_KEY", ["api_key"])
-  if (!projectId || !apiKey) throw new SkillError("INVALID_INPUT", "没有识别到完整配置。请从 Key 页面重新复制同时包含 Project ID 和 Api key 的两行内容。")
+  if (!projectId || !apiKey) throw new SkillError("INVALID_INPUT", "没有识别到完整配置。请从 Key 页面重新复制包含 Project ID 和 Api key 的配置。")
   if (/\s/.test(projectId) || /\s/.test(apiKey)) throw new SkillError("INVALID_INPUT", "Project ID 或 Api key 格式不正确，请从 Key 页面重新复制。")
   const file = credentialsFile()
   const directory = dirname(file)
@@ -1225,9 +1225,7 @@ async function imageAnalyze(input, refreshIndex = 0) {
 
 async function accountBalance(input) {
   const currentRequestId = requestId(input)
-  const channel = String(input.channel || process.env.FENGNIAO_CHANNEL || "fengn").trim()
-  const body = { request_id: currentRequestId, channel }
-  if (input.uid !== undefined && input.uid !== null && String(input.uid).trim()) body.uid = String(input.uid).trim()
+  const body = { request_id: currentRequestId }
   const payload = await apiRequest("/api/v1/user/available/petrolpak", body, currentRequestId)
   return success("account.balance", currentRequestId, "completed", { data: { petrolpaks: payload.data } })
 }

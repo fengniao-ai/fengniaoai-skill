@@ -105,10 +105,8 @@
       "description": "查询当前 Project ID 可用的蜂鸟AI 点数。",
       "triggers": ["剩余点数", "查询点数", "点数余额", "还有多少点"],
       "required": [],
-      "optional": ["channel", "uid"],
-      "defaults": {
-        "channel": "fengn"
-      },
+      "optional": [],
+      "defaults": {},
       "input_modes": ["json"],
       "response_mode": "sync",
       "command": "node scripts/fengniaoai.mjs account balance",

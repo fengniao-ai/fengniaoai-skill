@@ -7,7 +7,7 @@
 - 登录、注册和获取点数：https://fengniaoai.com/
 - 获取或检查 Project ID 与 Api key：https://fengniaoai.com/userCenter/key
 
-推荐让用户在 Key 页面点击“复制给 Agent”，将下面格式的两行内容粘贴到可信的私有对话：
+推荐让用户在 Key 页面点击“复制给 Agent”，将下面两行配置粘贴到可信的私有对话：
 
 ```bash
 export FENGNIAO_PROJECT_ID="Project ID"
@@ -36,7 +36,7 @@ export FENGNIAO_API_KEY="Api key"
 
 `/api/v1/user/available/petrolpak` 响应中的 `data` 是剩余点数的事实来源。如果返回多个油包，不自行虚构一个总数；按接口返回展示各油包可用值和有效期。
 
-余额查询默认发送 `channel=fengn`，以兼容当前生产接口。只有私有部署使用其他渠道时才通过 action 输入或 `FENGNIAO_CHANNEL` 覆盖；`uid` 不传时由服务端按已鉴权 App ID 查询绑定用户。
+余额查询只依赖已鉴权 Project ID 与 Api key，不传也不要求用户配置 `channel` 或 `uid`。官方、合作方和私有渠道项目均按各自 Project 关联的账户查询，用户无需了解渠道标识。
 
 ## 余额刷新策略
 

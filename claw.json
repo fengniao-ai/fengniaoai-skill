@@ -1,6 +1,6 @@
 {
   "name": "fengniaoai-skill",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": "fengniaoai",
   "description": "蜂鸟AI 是专注于电商、内容营销领域的 Agent 平台，通过 AI 翻译（图片翻译、视频翻译）、AI 图片（AI 生图、AI 修图）、AI 视频三大核心能力，帮助企业低成本、高质量、规模化打造商品 Listing、社媒内容、广告投放素材等全链路营销内容，实现“一个商品卖全球”。“0 门槛 1 站式，秒生爆款卖全球”，日处理客户需求近百万次，服务 20+ 行业平台级客户，支持 API 等多种交付方式。",
   "license": "Apache-2.0",
